@@ -17,17 +17,29 @@ import { fetchGoogleSheetsData, syncPushToGoogleSheets, SyncResult } from './ser
 import { Header } from './components/Header';
 import { Dashboard } from './components/Dashboard';
 import { OACModule } from './components/OACModule';
+import { CalendrierModule } from './components/CalendrierModule';
 import { CommandesPoussinsModule } from './components/CommandesPoussinsModule';
 import { VentesModule } from './components/VentesModule';
 import { FacturesModule } from './components/FacturesModule';
 import { DepensesModule } from './components/DepensesModule';
 import { ClientsModule } from './components/ClientsModule';
 import { CaisseModule } from './components/CaisseModule';
+import { RechercheModule } from './components/RechercheModule';
+import { ParametresModule } from './components/ParametresModule';
 import { SyncModal } from './components/SyncModal';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('oac'); // Default to OAC as requested by user
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [currentRole, setCurrentRole] = useState<UserRole>('Administrateur');
+
+  // Update tab when role changes
+  useEffect(() => {
+    if (currentRole === 'utilisateur') {
+      setActiveTab('calendrier');
+    } else {
+      setActiveTab('dashboard');
+    }
+  }, [currentRole]);
 
   // Application Data States with Persistence
   const [oacList, setOacList] = useState<OAC[]>(() =>
@@ -360,12 +372,17 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'dashboard' && (
+        {activeTab === 'calendrier' && (
+          <CalendrierModule oacList={oacList} />
+        )}
+        
+        {activeTab === 'dashboard' && currentRole !== 'utilisateur' && (
           <Dashboard
             oacList={oacList}
             depenses={depenses}
             clients={clients}
             factures={factures}
+            ventes={ventes}
             role={currentRole}
             onNavigate={(tab) => setActiveTab(tab)}
             onOpenNewOAC={() => setActiveTab('oac')}
@@ -447,6 +464,23 @@ export default function App() {
           <ClientsModule
             clients={clients}
             onAddClient={handleAddClient}
+          />
+        )}
+
+        {activeTab === 'recherche' && (
+          <RechercheModule
+            depenses={depenses}
+            ventes={ventes}
+            clients={clients}
+            onClose={() => setActiveTab('dashboard')}
+          />
+        )}
+
+        {activeTab === 'parametres' && (
+          <ParametresModule
+            syncStatus={syncStatus}
+            onTriggerSync={() => setSyncModalOpen(true)}
+            onClose={() => setActiveTab('dashboard')}
           />
         )}
       </main>

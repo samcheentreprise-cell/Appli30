@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { OAC, SoumissionEnAttente, UserRole } from '../types';
 import { TYPES_OAC, RACES_OAC, FOURNISSEURS_OAC } from '../data/initialData';
 
@@ -27,8 +27,28 @@ export const OACModule: React.FC<OACModuleProps> = ({
   role,
   onClose,
 }) => {
+  // Main two tabs: 'validation' (default) vs 'cycle' (Commandes, Mirage, Eclosions)
+  const [mainTab, setMainTab] = useState<'validation' | 'cycle'>('validation');
   const [tabActif, setTabActif] = useState<0 | 1 | 2>(0);
+  const [soumissionFilter, setSoumissionFilter] = useState<'Tous' | 'En attente' | 'Approuvé' | 'Rejeté'>('Tous');
+  const [soumissionSearch, setSoumissionSearch] = useState('');
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const pendingCount = soumissions.filter((s) => s.statut === 'En attente').length;
+  const approvedCount = soumissions.filter((s) => s.statut === 'Approuvé').length;
+  const rejectedCount = soumissions.filter((s) => s.statut === 'Rejeté').length;
+
+  const filteredSoumissions = useMemo(() => {
+    return soumissions.filter((s) => {
+      const matchFilter = soumissionFilter === 'Tous' ? true : s.statut === soumissionFilter;
+      const matchSearch = soumissionSearch
+        ? `${s.type} ${s.soumisPar} ${s.resume} ${s.dateSoumission}`
+            .toLowerCase()
+            .includes(soumissionSearch.toLowerCase().trim())
+        : true;
+      return matchFilter && matchSearch;
+    });
+  }, [soumissions, soumissionFilter, soumissionSearch]);
 
   // Selected IDs in tables
   const [selC, setSelC] = useState<string>('');
@@ -457,136 +477,265 @@ export const OACModule: React.FC<OACModuleProps> = ({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          VALIDATION ADMIN — SOUMISSIONS EN ATTENTE (Exact screenshot 1 top box)
+          2 MAIN TOP-LEVEL TABS (Requested by user: Validation Admin by default)
          ══════════════════════════════════════════════════════════════════════════ */}
-      <div className="bg-gradient-to-br from-[#fff8e1] to-[#fffde7] border-2 border-[#f39c12] rounded-2xl p-4 sm:p-5 shadow-sm space-y-3">
-        <div className="flex items-center justify-between pb-2 border-b-2 border-[#f39c12]">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">✅</span>
-            <h2 className="text-[#b8860b] font-bold text-sm sm:text-base tracking-wide">
-              Validation admin — Soumissions en attente
-            </h2>
-          </div>
-          <button
-            onClick={onRefreshSoumissions}
-            className="bg-[#f39c12] hover:bg-[#d68910] text-white px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition flex items-center gap-1"
+      <div className="flex flex-wrap items-center gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setMainTab('validation')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm ${
+            mainTab === 'validation'
+              ? 'bg-gradient-to-r from-[#b8860b] to-[#f39c12] text-white shadow-md ring-2 ring-[#f39c12]/40'
+              : 'bg-[#f8f9fa] text-slate-700 hover:bg-amber-50 hover:text-[#b8860b] border border-slate-200'
+          }`}
+        >
+          <span>✅</span>
+          <span>Validation admin — Soumissions en attente</span>
+          {pendingCount > 0 ? (
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                mainTab === 'validation'
+                  ? 'bg-white text-[#b8860b]'
+                  : 'bg-[#f39c12] text-white animate-pulse'
+              }`}
+            >
+              {pendingCount}
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/30 text-white">
+              0
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMainTab('cycle')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm ${
+            mainTab === 'cycle'
+              ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md ring-2 ring-[#2E86C1]/40'
+              : 'bg-[#f8f9fa] text-slate-700 hover:bg-sky-50 hover:text-[#1B4F72] border border-slate-200'
+          }`}
+        >
+          <span>🥚</span>
+          <span>Commandes, Mirage &amp; Éclosions</span>
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+              mainTab === 'cycle' ? 'bg-white/30 text-white' : 'bg-slate-200 text-slate-700'
+            }`}
           >
-            <span>⟳ Actualiser</span>
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-700">
-            <thead>
-              <tr className="bg-[#b8860b] text-white font-bold uppercase text-[11px] tracking-wider">
-                <th className="px-3 py-2">DATE</th>
-                <th className="px-3 py-2">TYPE</th>
-                <th className="px-3 py-2">SOUMIS PAR</th>
-                <th className="px-3 py-2">RÉSUMÉ</th>
-                <th className="px-3 py-2 text-center">STATUT</th>
-                <th className="px-3 py-2 text-right">ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#ffe082]/60">
-              {soumissions.slice(0, 6).map((s, idx) => {
-                const isPending = s.statut === 'En attente';
-                const isApproved = s.statut === 'Approuvé';
-                const isRejected = s.statut === 'Rejeté';
-
-                return (
-                  <tr key={idx} className="hover:bg-[#fff3cd]/80 transition">
-                    <td className="px-3 py-2.5 whitespace-nowrap font-medium">{s.dateSoumission}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap font-bold text-slate-900">{s.type}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-slate-600">{s.soumisPar}</td>
-                    <td className="px-3 py-2.5 text-slate-800">{s.resume}</td>
-                    <td className="px-3 py-2.5 text-center whitespace-nowrap">
-                      {isApproved && (
-                        <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-[#d4edda] text-[#155724] border border-[#c3e6cb]">
-                          APPROUVÉ
-                        </span>
-                      )}
-                      {isRejected && (
-                        <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-[#f8d7da] text-[#721c24] border border-[#f5c6cb]">
-                          REJETÉ
-                        </span>
-                      )}
-                      {isPending && (
-                        <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-[#fff3cd] text-[#856404] border border-[#ffe082]">
-                          EN ATTENTE
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      {isPending ? (
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleOpenApprove(s)}
-                            className="bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] text-white px-2.5 py-1 rounded-md text-[11px] font-bold shadow-sm transition"
-                          >
-                            ✔ Approuver
-                          </button>
-                          <button
-                            onClick={() => handleOpenReject(s)}
-                            className="bg-gradient-to-r from-[#922B21] to-[#E74C3C] hover:from-[#7B241C] hover:to-[#CB4335] text-white px-2.5 py-1 rounded-md text-[11px] font-bold shadow-sm transition"
-                          >
-                            ✕ Rejeter
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-[11px] text-slate-500 font-medium">
-                          Traité par {s.validPar || 'admin'}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+            {oacList.length} lots
+          </span>
+        </button>
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          TABS ROW (Exact 1. Commandes, 2. Mirage (J+18), 3. Eclosion (J+21))
+          MAIN TAB 1: VALIDATION ADMIN — SOUMISSIONS EN ATTENTE (Active by default)
          ══════════════════════════════════════════════════════════════════════════ */}
-      <div className="flex border-b-[3px] border-[#2e86c1] gap-1 pt-1">
-        <button
-          onClick={() => {
-            setTabActif(0);
-          }}
-          className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
-            tabActif === 0
-              ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
-              : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
-          }`}
-        >
-          1. Commandes
-        </button>
-        <button
-          onClick={() => {
-            setTabActif(1);
-          }}
-          className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
-            tabActif === 1
-              ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
-              : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
-          }`}
-        >
-          2. Mirage (J+18)
-        </button>
-        <button
-          onClick={() => {
-            setTabActif(2);
-          }}
-          className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
-            tabActif === 2
-              ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
-              : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
-          }`}
-        >
-          3. Eclosion (J+21)
-        </button>
-      </div>
+      {mainTab === 'validation' && role === 'admin' && (
+        <div className="bg-gradient-to-br from-[#fff8e1] to-[#fffde7] border-2 border-[#f39c12] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 animate-fade-in">
+          {/* Header */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b-2 border-[#f39c12]">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">✅</span>
+              <div>
+                <h2 className="text-[#b8860b] font-bold text-sm sm:text-base tracking-wide">
+                  Validation admin — Soumissions en attente
+                </h2>
+                <p className="text-[11px] text-slate-600">
+                  Validez ou rejetez les déclarations saisies par les opérateurs
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onRefreshSoumissions}
+              className="bg-[#f39c12] hover:bg-[#d68910] text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition flex items-center gap-1.5"
+            >
+              <span>⟳ Actualiser</span>
+            </button>
+          </div>
+
+          {/* 4 Mini KPI Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div className="bg-white rounded-xl p-3 border border-amber-200 text-center shadow-xs">
+              <div className="text-[10px] uppercase font-bold text-slate-500">Total</div>
+              <div className="text-lg font-black text-slate-800">{soumissions.length}</div>
+            </div>
+            <div className="bg-white rounded-xl p-3 border border-amber-300 text-center shadow-xs">
+              <div className="text-[10px] uppercase font-bold text-amber-700">En attente</div>
+              <div className="text-lg font-black text-amber-600">{pendingCount}</div>
+            </div>
+            <div className="bg-white rounded-xl p-3 border border-emerald-300 text-center shadow-xs">
+              <div className="text-[10px] uppercase font-bold text-emerald-700">Approuvées</div>
+              <div className="text-lg font-black text-emerald-600">{approvedCount}</div>
+            </div>
+            <div className="bg-white rounded-xl p-3 border border-rose-300 text-center shadow-xs">
+              <div className="text-[10px] uppercase font-bold text-rose-700">Rejetées</div>
+              <div className="text-lg font-black text-rose-600">{rejectedCount}</div>
+            </div>
+          </div>
+
+          {/* Filters & Search */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-amber-200 text-xs">
+              {(['Tous', 'En attente', 'Approuvé', 'Rejeté'] as const).map((filtre) => (
+                <button
+                  key={filtre}
+                  type="button"
+                  onClick={() => setSoumissionFilter(filtre)}
+                  className={`px-3 py-1 rounded-lg font-bold transition ${
+                    soumissionFilter === filtre
+                      ? 'bg-[#f39c12] text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {filtre}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 min-w-[200px] max-w-sm">
+              <input
+                type="text"
+                placeholder="Rechercher par type, auteur, lot..."
+                value={soumissionSearch}
+                onChange={(e) => setSoumissionSearch(e.target.value)}
+                className="w-full px-3 py-1.5 bg-white border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#f39c12]"
+              />
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="overflow-x-auto bg-white rounded-xl border border-amber-200 shadow-xs">
+            <table className="w-full text-left text-xs text-slate-700">
+              <thead>
+                <tr className="bg-[#b8860b] text-white font-bold uppercase text-[11px] tracking-wider">
+                  <th className="px-3 py-2.5">DATE</th>
+                  <th className="px-3 py-2.5">TYPE</th>
+                  <th className="px-3 py-2.5">SOUMIS PAR</th>
+                  <th className="px-3 py-2.5">RÉSUMÉ</th>
+                  <th className="px-3 py-2.5 text-center">STATUT</th>
+                  <th className="px-3 py-2.5 text-right">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#ffe082]/60">
+                {filteredSoumissions.map((s, idx) => {
+                  const isPending = s.statut === 'En attente';
+                  const isApproved = s.statut === 'Approuvé';
+                  const isRejected = s.statut === 'Rejeté';
+
+                  return (
+                    <tr key={idx} className="hover:bg-[#fff3cd]/80 transition">
+                      <td className="px-3 py-2.5 whitespace-nowrap font-medium">{s.dateSoumission}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap font-bold text-slate-900">
+                        {s.type}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-slate-600">
+                        {s.soumisPar}
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-800">{s.resume}</td>
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                        {isApproved && (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-[#d4edda] text-[#155724] border border-[#c3e6cb]">
+                            APPROUVÉ
+                          </span>
+                        )}
+                        {isRejected && (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-[#f8d7da] text-[#721c24] border border-[#f5c6cb]">
+                            REJETÉ
+                          </span>
+                        )}
+                        {isPending && (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-[#fff3cd] text-[#856404] border border-[#ffe082]">
+                            EN ATTENTE
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                        {isPending ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenApprove(s)}
+                              className="bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] text-white px-3 py-1 rounded-lg text-[11px] font-bold shadow-xs transition"
+                            >
+                              ✔ Approuver
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenReject(s)}
+                              className="bg-gradient-to-r from-[#922B21] to-[#E74C3C] hover:from-[#7B241C] hover:to-[#CB4335] text-white px-3 py-1 rounded-lg text-[11px] font-bold shadow-xs transition"
+                            >
+                              ✕ Rejeter
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-500 font-medium">
+                            Traité par {s.validPar || 'admin'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredSoumissions.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-slate-500 font-medium">
+                      Aucune soumission trouvée.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          MAIN TAB 2: SUIVI DU CYCLE OAC (Commandes, Mirage, Éclosions)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {mainTab === 'cycle' && role !== 'comptable' && (
+        <div className="space-y-4 animate-fade-in">
+          {/* Sub-Tabs Row (1. Commandes, 2. Mirage (J+18), 3. Eclosion (J+21)) */}
+          <div className="flex border-b-[3px] border-[#2e86c1] gap-1 pt-1">
+            <button
+              onClick={() => {
+                setTabActif(0);
+              }}
+              className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
+                tabActif === 0
+                  ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
+                  : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
+              }`}
+            >
+              1. Commandes
+            </button>
+            <button
+              onClick={() => {
+                setTabActif(1);
+              }}
+              className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
+                tabActif === 1
+                  ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
+                  : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
+              }`}
+            >
+              2. Mirage (J+18)
+            </button>
+            <button
+              onClick={() => {
+                setTabActif(2);
+              }}
+              className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
+                tabActif === 2
+                  ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
+                  : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
+              }`}
+            >
+              3. Eclosion (J+21)
+            </button>
+          </div>
 
       {/* ══════════════════════════════════════════════════════════════════════════
           TAB 1 : COMMANDE OAC (Screenshot 1)
@@ -866,6 +1015,12 @@ export const OACModule: React.FC<OACModuleProps> = ({
               </table>
             </div>
           </div>
+        </div>
+      )}
+
+      {mainTab === 'cycle' && role === 'comptable' && (
+        <div className="bg-rose-100 text-rose-800 p-6 rounded-2xl border border-rose-200 text-center font-bold">
+          Accès refusé à la gestion des OAC.
         </div>
       )}
 
@@ -1273,6 +1428,8 @@ export const OACModule: React.FC<OACModuleProps> = ({
               </table>
             </div>
           </div>
+        </div>
+      )}
         </div>
       )}
 

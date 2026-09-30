@@ -1,6 +1,6 @@
 export const GSHEET_WEBAPP_URL = 
   (import.meta as any).env?.VITE_GSHEET_WEBAPP_URL || 
-  'https://script.google.com/macros/s/AKfycbwnzF6ptccDsjjNFi6NfOvcIcWK_IHVqLB-G4X2k4RwZsOKgGhs2bvnyVc4om8qNJii/exec';
+  'https://script.google.com/macros/s/AKfycby0Y8nJz__Jf0EqNyAWxkZyYWvCAEeBbmqqE_gdQNahvW4yinYgKqVys7Rf1nU-cYd4uA/exec';
 
 export interface SyncResult {
   success: boolean;

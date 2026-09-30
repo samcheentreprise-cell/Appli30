@@ -154,4 +154,4 @@ export interface Bordereau {
   statut: 'Emis' | 'Livré';
 }
 
-export type UserRole = 'Administrateur' | 'Directeur' | 'Responsable Commercial' | 'Opérateur Couvoir';
+export type UserRole = 'admin' | 'utilisateur' | 'comptable';

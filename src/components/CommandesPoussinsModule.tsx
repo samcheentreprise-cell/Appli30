@@ -12,6 +12,45 @@ interface CommandesPoussinsModuleProps {
   onClose?: () => void;
 }
 
+// Distinct vibrant gradients for each available hatch date card
+export const HATCH_COLOR_PALETTES = [
+  {
+    bg: 'linear-gradient(135deg, #1e40af 0%, #2563eb 50%, #3b82f6 100%)', // Bleu Roi
+    ring: 'ring-sky-300',
+    border: '#60a5fa',
+  },
+  {
+    bg: 'linear-gradient(135deg, #065f46 0%, #059669 50%, #10b981 100%)', // Vert Émeraude
+    ring: 'ring-emerald-300',
+    border: '#34d399',
+  },
+  {
+    bg: 'linear-gradient(135deg, #5b21b6 0%, #7c3aed 50%, #8b5cf6 100%)', // Violet
+    ring: 'ring-purple-300',
+    border: '#a78bfa',
+  },
+  {
+    bg: 'linear-gradient(135deg, #9a3412 0%, #ea580c 50%, #f97316 100%)', // Orange / Ambre
+    ring: 'ring-orange-300',
+    border: '#fb923c',
+  },
+  {
+    bg: 'linear-gradient(135deg, #0f766e 0%, #0d9488 50%, #14b8a6 100%)', // Sarcelle
+    ring: 'ring-teal-300',
+    border: '#2dd4bf',
+  },
+  {
+    bg: 'linear-gradient(135deg, #9d174d 0%, #db2777 50%, #f43f5e 100%)', // Rose Framboise
+    ring: 'ring-rose-300',
+    border: '#fb7185',
+  },
+  {
+    bg: 'linear-gradient(135deg, #854d0e 0%, #d97706 50%, #f59e0b 100%)', // Bronze / Or
+    ring: 'ring-amber-300',
+    border: '#fde047',
+  },
+];
+
 export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = ({
   commandes,
   clients,
@@ -579,10 +618,26 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                     {/* Header */}
                     <div className="bg-[#f8f9fa] px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                       <span className="font-bold text-sm text-[#1e293b]">{d.dateFormatee}</span>
-                      <span className="bg-white border border-slate-200 px-2.5 py-0.5 rounded-full text-xs font-bold text-emerald-600 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                        <span>Ouvert</span>
-                      </span>
+                      <div className="flex gap-2">
+                        {(() => {
+                           const today = new Date();
+                           const dateParts = d.date.split('/');
+                           const hatch = new Date(parseInt(dateParts[2]), parseInt(dateParts[1])-1, parseInt(dateParts[0]));
+                           const diffDays = Math.ceil((hatch.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                           if (diffDays <= 1 && diffDays >= 0) {
+                             return (
+                               <span className="bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full text-[10px] font-bold text-amber-800 flex items-center gap-1">
+                                 ⚠️ Alerte J-{diffDays}
+                               </span>
+                             );
+                           }
+                           return null;
+                        })()}
+                        <span className="bg-white border border-slate-200 px-2.5 py-0.5 rounded-full text-xs font-bold text-emerald-600 flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                          <span>Ouvert</span>
+                        </span>
+                      </div>
                     </div>
 
                     {/* Body */}
@@ -673,30 +728,42 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                 <span>📅</span>
                 <span>Date d'éclosion</span>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                {hatchDatesData.slice(0, 2).map((d) => {
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {hatchDatesData.map((d, idx) => {
                   const isSelected = selDateKey === d.date;
-                  const dispo = d.prevision - d.commande;
+                  const dispo = Math.max(0, d.prevision - d.commande);
+                  const palette = HATCH_COLOR_PALETTES[idx % HATCH_COLOR_PALETTES.length];
 
                   return (
                     <div
                       key={d.date}
                       onClick={() => setSelDateKey(d.date)}
-                      className={`p-3.5 rounded-xl cursor-pointer transition text-white shadow-md ${
+                      className={`p-3.5 rounded-xl cursor-pointer transition text-white shadow-md relative overflow-hidden select-none ${
                         isSelected
-                          ? 'ring-4 ring-sky-300 scale-[1.02]'
-                          : 'opacity-90 hover:opacity-100'
+                          ? 'ring-4 ring-offset-2 ring-sky-300 scale-[1.03] shadow-lg'
+                          : 'opacity-90 hover:opacity-100 hover:scale-[1.01]'
                       }`}
                       style={{
-                        background:
-                          dispo <= 50
-                            ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
-                            : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                        background: palette.bg,
                       }}
                     >
-                      <div className="font-extrabold text-sm">{d.date}</div>
-                      <div className="text-xs text-white/90">{dispo} place(s)</div>
-                      <div className="text-[11px] text-white/80 mt-1">{d.type}</div>
+                      <div className="flex items-start justify-between">
+                        <div className="font-extrabold text-sm tracking-wide">{d.date}</div>
+                        {isSelected && (
+                          <span className="w-2.5 h-2.5 rounded-full bg-white shadow-xs" title="Sélectionné" />
+                        )}
+                      </div>
+                      <div className="text-xs font-semibold text-white/95 mt-0.5">
+                        {dispo.toLocaleString('fr-FR')} place(s)
+                      </div>
+                      <div className="text-[11px] font-medium text-white/85 mt-1 flex items-center justify-between">
+                        <span>{d.type}</span>
+                        {dispo <= 50 && (
+                          <span className="text-[9px] bg-black/25 text-white px-1.5 py-0.5 rounded font-bold uppercase">
+                            Presque plein
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
