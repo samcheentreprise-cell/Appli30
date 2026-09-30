@@ -1,0 +1,8 @@
+{
+  "name": "Couvoir SAMCHE",
+  "description": "Application mobile de gestion pour le Couvoir SAMCHE : suivi des OAC, commandes de poussins, ventes, dépenses, factures, caisse, authentification par rôles et synchronisation Google Sheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
