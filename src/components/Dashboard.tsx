@@ -51,7 +51,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   // ══════════════════════════════════════════════════════════════════════════
-  // KPI CALCULATIONS (matching GAS logic & Screenshot exactly)
+  // KPI CALCULATIONS (strictly from Google Sheet data)
   // ══════════════════════════════════════════════════════════════════════════
   const kpiData = useMemo(() => {
     const now = new Date();
@@ -75,10 +75,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       if (dEclo) {
         dEclo.setHours(0, 0, 0, 0);
-        const isEclos = dEclo < now;
+        const isEclos = lot.complet || dEclo < now;
 
         if (isEclos) {
-          // Lot hatched: check year and month
           if (dEclo.getFullYear() === currentYear) {
             const tx = lot.txEclosionOeufsAchetes || (lot.commerciaux && lot.recus ? lot.commerciaux / lot.recus : 0);
             if (tx > 0) {
@@ -90,24 +89,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
             if (lot.commerciaux) totalPoussinsMois += lot.commerciaux;
           }
         } else {
-          // Lot in progress / incubation
           nbLotsIncub++;
-          // Expected chicks (Col M)
-          const attendus = lot.fertiles || (lot.recus ? Math.round(lot.recus * 0.73) : 0);
+          const attendus = lot.attendus || lot.fertiles || (lot.recus ? Math.round(lot.recus * 0.75) : 0);
           totalPoussinsAttendus += attendus;
         }
+      } else if (!lot.complet) {
+        nbLotsIncub++;
+        totalPoussinsAttendus += lot.attendus || (lot.recus ? Math.round(lot.recus * 0.75) : 0);
       }
     });
 
-    // If initial sample lots in screenshot: 3 lots, 28 593 attendus
-    if (nbLotsIncub === 0 && oacList.length > 0) {
-      nbLotsIncub = 3;
-      totalPoussinsAttendus = 28593;
-    } else if (totalPoussinsAttendus === 0) {
-      totalPoussinsAttendus = 28593;
-    }
-
-    // Ventes du mois (Month 9 - September)
+    // Ventes du mois (from real sales in sheet)
     let totalVentesMois = 0;
     ventes.forEach((v) => {
       const parts = (v.date || '').split('/');
@@ -118,11 +110,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         }
       }
     });
-    if (totalVentesMois === 0) {
-      totalVentesMois = 9165000; // Screenshot value for September 2026
-    }
 
-    // Dépenses du mois (Month 9 - September)
+    // Dépenses du mois (from real expenses in sheet)
     let totalDepensesMois = 0;
     depenses.forEach((d) => {
       const parts = (d.date || '').split('/');
@@ -133,54 +122,76 @@ export const Dashboard: React.FC<DashboardProps> = ({
         }
       }
     });
-    if (totalDepensesMois === 0) {
-      totalDepensesMois = 16147500; // Screenshot value for September 2026
-    }
 
     const moyTaux = countTauxAnnee > 0 ? Math.round((sumTauxAnnee / countTauxAnnee) * 100) : 0;
 
     return {
-      nbLotsIncubation: nbLotsIncub || 3,
-      poussinsAttendus: totalPoussinsAttendus || 28593,
+      nbLotsIncubation: nbLotsIncub,
+      poussinsAttendus: totalPoussinsAttendus,
       poussinsMois: totalPoussinsMois > 0 ? totalPoussinsMois : null,
       ventesMois: totalVentesMois,
-      tauxEclosion: moyTaux > 0 ? `${moyTaux}%` : null,
+      tauxEclosion: moyTaux > 0 ? `${moyTaux}%` : (sumTauxAnnee > 0 ? `${Math.round(sumTauxAnnee * 100)}%` : '--'),
       depensesMois: totalDepensesMois,
     };
   }, [oacList, ventes, depenses]);
 
   // ══════════════════════════════════════════════════════════════════════════
-  // LOTS EN COURS (matching Screenshot 2: 12/09, 15/09, 23/09)
+  // LOTS EN COURS (strictly from real OAC batches in the Sheet)
   // ══════════════════════════════════════════════════════════════════════════
   const lotsEnCours = useMemo(() => {
-    // Exact items from screenshot:
-    return [
-      {
-        date: '12/09/2026',
-        desc: 'Chairs Ross 308 - OAC-2609-002 - 19440 cartons',
-        detail: 'Eclœsion: 04/10/2026 (J-4)',
-        btnText: 'J18/21',
-        dotColor: 'bg-[#f59e0b]', // orange
-        btnColor: 'bg-[#d97706] hover:bg-[#b45309]', // orange
-      },
-      {
-        date: '15/09/2026',
-        desc: 'Chairs Ross 308 - OAC-2609-003 - 19440 cartons',
-        detail: 'Eclœsion: 07/10/2026 (J-7)',
-        btnText: 'J15/21',
-        dotColor: 'bg-[#22c55e]', // green
-        btnColor: 'bg-[#15803d] hover:bg-[#166534]', // green
-      },
-      {
-        date: '23/09/2026',
-        desc: 'Chairs Ross 308 - OAC-2609-002 - 3600 cartons',
-        detail: 'Eclœsion: 15/10/2026 (J-15)',
-        btnText: 'J7/21',
-        dotColor: 'bg-[#22c55e]', // green
-        btnColor: 'bg-[#15803d] hover:bg-[#166534]', // green
-      },
-    ];
-  }, []);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    const enIncubation = oacList.filter((lot) => {
+      if (lot.complet) return false;
+      if (!lot.eclosion) return true;
+      const parts = lot.eclosion.split('/');
+      if (parts.length === 3) {
+        const dEclo = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+        return dEclo >= now;
+      }
+      return true;
+    });
+
+    return enIncubation.map((lot) => {
+      let joursRestants = 0;
+      let joursElapsed = 0;
+      if (lot.eclosion) {
+        const parts = lot.eclosion.split('/');
+        if (parts.length === 3) {
+          const dEclo = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+          const diffMs = dEclo.getTime() - now.getTime();
+          joursRestants = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+          joursElapsed = Math.min(21, Math.max(0, 21 - joursRestants));
+        }
+      }
+
+      // If lot.date is missing or '--', calculate it from eclosion (J-21)
+      let displayDate = lot.date && lot.date !== '--' ? lot.date : '';
+      if (!displayDate && lot.eclosion) {
+        const parts = lot.eclosion.split('/');
+        if (parts.length === 3) {
+          const dt = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+          if (!isNaN(dt.getTime())) {
+            dt.setDate(dt.getDate() - 21);
+            displayDate = `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
+          }
+        }
+      }
+
+      const dotColor = joursRestants <= 3 ? 'bg-[#f59e0b]' : 'bg-[#22c55e]';
+      const btnColor = joursRestants <= 3 ? 'bg-[#d97706] hover:bg-[#b45309]' : 'bg-[#15803d] hover:bg-[#166534]';
+
+      return {
+        date: displayDate || '--',
+        desc: `${lot.type || 'Chairs'} ${lot.race || ''} - ${lot.id} - ${lot.cartons || 0} cartons (${lot.recus || 0} œufs)`,
+        detail: `Éclosion : ${lot.eclosion || '--'} (J-${joursRestants})`,
+        btnText: `J${joursElapsed}/21`,
+        dotColor,
+        btnColor,
+      };
+    });
+  }, [oacList]);
 
   return (
     <div className="bg-[#0f172a] text-[#E2E8F0] min-h-screen -m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 font-['Inter',sans-serif] space-y-4 animate-fade-in select-none">

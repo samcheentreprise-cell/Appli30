@@ -8,6 +8,7 @@ interface OACModuleProps {
   onAddOAC: (oac: OAC) => void;
   onUpdateOAC: (oac: OAC) => void;
   onDeleteOAC: (id: string) => void;
+  onAddSoumission: (soumission: SoumissionEnAttente) => void;
   onApproveSoumission: (idSoumission: string, idChoisi: string) => void;
   onRejectSoumission: (idSoumission: string, raison: string) => void;
   onRefreshSoumissions?: () => void;
@@ -21,6 +22,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   onAddOAC,
   onUpdateOAC,
   onDeleteOAC,
+  onAddSoumission,
   onApproveSoumission,
   onRejectSoumission,
   onRefreshSoumissions,
@@ -28,7 +30,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   onClose,
 }) => {
   // Main two tabs: 'validation' (default) vs 'cycle' (Commandes, Mirage, Eclosions)
-  const [mainTab, setMainTab] = useState<'validation' | 'cycle'>('validation');
+  const [mainTab, setMainTab] = useState<'validation' | 'cycle'>(role === 'admin' ? 'validation' : 'cycle');
   const [tabActif, setTabActif] = useState<0 | 1 | 2>(0);
   const [soumissionFilter, setSoumissionFilter] = useState<'Tous' | 'En attente' | 'Approuvé' | 'Rejeté'>('Tous');
   const [soumissionSearch, setSoumissionSearch] = useState('');
@@ -244,8 +246,34 @@ export const OACModule: React.FC<OACModuleProps> = ({
       const totalRecus = cartonsNum * 360;
       const cubes = totalRecus - cassesNum;
 
+      // Operator Role: Always send to validation before integration into database
+      if (role !== 'admin') {
+        const newSoumission: SoumissionEnAttente = {
+          ligne: soumissions.length + 1,
+          idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
+          type: 'Commande',
+          soumisPar: 'Opérateur',
+          dateSoumission: new Date().toLocaleDateString('fr-FR'),
+          statut: 'En attente',
+          resume: `Commande ${cType} (${cRace}) - ${cartonsNum} cartons (${cFourn})`,
+          donnees: {
+            date: cDt,
+            type: cType,
+            race: cRace,
+            fournisseur: cFourn,
+            cartons: cartonsNum,
+            casses: cassesNum,
+            eclosion: eclosionDate,
+          },
+        };
+        onAddSoumission(newSoumission);
+        showNotification('📨 Commande transmise à la validation administrateur avec succès. Elle sera intégrée dès son approbation.', true);
+        razC();
+        return;
+      }
+
       if (selC) {
-        // Modification
+        // Modification Admin
         const existing = oacList.find((x) => x.id === selC);
         if (existing) {
           const updated: OAC = {
@@ -265,7 +293,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
           razC();
         }
       } else {
-        // Nouvelle commande
+        // Nouvelle commande Admin
         const newId = `OAC-2609-00${oacList.length + 1}`;
         const newOac: OAC = {
           _v: 25,
@@ -288,7 +316,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
           morts: null,
         };
         onAddOAC(newOac);
-        showNotification('Commande enregistrée avec succès.', true);
+        showNotification('Commande enregistrée directement dans la base de données.', true);
         razC();
       }
     } else if (tabActif === 1) {
@@ -305,13 +333,36 @@ export const OACModule: React.FC<OACModuleProps> = ({
         const clairsNum = parseInt(mCla) || 0;
         const cubes = existing.cubes || (existing.cartons * 360 - existing.nbCasses);
         const fertiles = Math.max(0, cubes - clairsNum);
+
+        // Operator Role: Send mirage declaration to validation
+        if (role !== 'admin') {
+          const newSoumission: SoumissionEnAttente = {
+            ligne: soumissions.length + 1,
+            idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
+            type: 'Mirage',
+            soumisPar: 'Opérateur',
+            dateSoumission: new Date().toLocaleDateString('fr-FR'),
+            statut: 'En attente',
+            resume: `Mirage lot ${mId} : ${clairsNum} clairs, ${fertiles} fertiles`,
+            donnees: {
+              id: mId,
+              clairs: clairsNum,
+              fertiles,
+            },
+          };
+          onAddSoumission(newSoumission);
+          showNotification('📨 Déclaration de mirage transmise à la validation administrateur.', true);
+          razM();
+          return;
+        }
+
         const updated: OAC = {
           ...existing,
           clairs: clairsNum,
           fertiles,
         };
         onUpdateOAC(updated);
-        showNotification('Données de mirage enregistrées avec succès.', true);
+        showNotification('Données de mirage enregistrées directement dans la base.', true);
         razM();
       }
     } else if (tabActif === 2) {
@@ -340,6 +391,31 @@ export const OACModule: React.FC<OACModuleProps> = ({
         const bonus = Math.ceil(commNum * 0.02);
         const pourVente = commNum - bonus;
 
+        // Operator Role: Send eclosion declaration to validation
+        if (role !== 'admin') {
+          const newSoumission: SoumissionEnAttente = {
+            ligne: soumissions.length + 1,
+            idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
+            type: 'Éclosion',
+            soumisPar: 'Opérateur',
+            dateSoumission: new Date().toLocaleDateString('fr-FR'),
+            statut: 'En attente',
+            resume: `Éclosion lot ${eId} : ${commNum} commerciaux, ${hanNum} handicapés, ${morNum} morts`,
+            donnees: {
+              id: eId,
+              commerciaux: commNum,
+              nes: commNum,
+              handicapes: hanNum,
+              morts: morNum,
+              pourVente,
+            },
+          };
+          onAddSoumission(newSoumission);
+          showNotification('📨 Déclaration d\'éclosion transmise à la validation administrateur.', true);
+          razE();
+          return;
+        }
+
         const updated: OAC = {
           ...existing,
           commerciaux: commNum,
@@ -349,7 +425,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
           pourVente,
         };
         onUpdateOAC(updated);
-        showNotification("Données d'éclosion enregistrées avec succès.", true);
+        showNotification("Données d'éclosion enregistrées directement dans la base.", true);
         razE();
       }
     }
@@ -480,33 +556,35 @@ export const OACModule: React.FC<OACModuleProps> = ({
           2 MAIN TOP-LEVEL TABS (Requested by user: Validation Admin by default)
          ══════════════════════════════════════════════════════════════════════════ */}
       <div className="flex flex-wrap items-center gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm">
-        <button
-          type="button"
-          onClick={() => setMainTab('validation')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm ${
-            mainTab === 'validation'
-              ? 'bg-gradient-to-r from-[#b8860b] to-[#f39c12] text-white shadow-md ring-2 ring-[#f39c12]/40'
-              : 'bg-[#f8f9fa] text-slate-700 hover:bg-amber-50 hover:text-[#b8860b] border border-slate-200'
-          }`}
-        >
-          <span>✅</span>
-          <span>Validation admin — Soumissions en attente</span>
-          {pendingCount > 0 ? (
-            <span
-              className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                mainTab === 'validation'
-                  ? 'bg-white text-[#b8860b]'
-                  : 'bg-[#f39c12] text-white animate-pulse'
-              }`}
-            >
-              {pendingCount}
-            </span>
-          ) : (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/30 text-white">
-              0
-            </span>
-          )}
-        </button>
+        {role === 'admin' && (
+          <button
+            type="button"
+            onClick={() => setMainTab('validation')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm ${
+              mainTab === 'validation'
+                ? 'bg-gradient-to-r from-[#b8860b] to-[#f39c12] text-white shadow-md ring-2 ring-[#f39c12]/40'
+                : 'bg-[#f8f9fa] text-slate-700 hover:bg-amber-50 hover:text-[#b8860b] border border-slate-200'
+            }`}
+          >
+            <span>✅</span>
+            <span>{role === 'admin' ? 'Validation admin — Soumissions en attente' : 'Suivi de mes soumissions (Validation)'}</span>
+            {pendingCount > 0 ? (
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                  mainTab === 'validation'
+                    ? 'bg-white text-[#b8860b]'
+                    : 'bg-[#f39c12] text-white animate-pulse'
+                }`}
+              >
+                {pendingCount}
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/30 text-white">
+                0
+              </span>
+            )}
+          </button>
+        )}
 
         <button
           type="button"
@@ -540,21 +618,34 @@ export const OACModule: React.FC<OACModuleProps> = ({
               <span className="text-xl">✅</span>
               <div>
                 <h2 className="text-[#b8860b] font-bold text-sm sm:text-base tracking-wide">
-                  Validation admin — Soumissions en attente
+                  {role === 'admin' ? 'Validation admin — Soumissions en attente' : 'Suivi des déclarations — Circuit de validation'}
                 </h2>
                 <p className="text-[11px] text-slate-600">
-                  Validez ou rejetez les déclarations saisies par les opérateurs
+                  {role === 'admin' 
+                    ? 'Validez ou rejetez les déclarations saisies par les opérateurs avant intégration dans la base'
+                    : 'Toutes vos saisies sont enregistrées ici et transmises à l\'administrateur avant intégration dans la base'}
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onRefreshSoumissions}
-              className="bg-[#f39c12] hover:bg-[#d68910] text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition flex items-center gap-1.5"
-            >
-              <span>⟳ Actualiser</span>
-            </button>
+            {onRefreshSoumissions && (
+              <button
+                type="button"
+                onClick={onRefreshSoumissions}
+                className="bg-[#f39c12] hover:bg-[#d68910] text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition flex items-center gap-1.5"
+              >
+                <span>⟳ Actualiser</span>
+              </button>
+            )}
           </div>
+
+          {role !== 'admin' && (
+            <div className="bg-amber-100/80 border border-amber-300 rounded-xl p-3 text-xs text-amber-950 flex items-center gap-2.5">
+              <span className="text-lg shrink-0">🛡️</span>
+              <div>
+                <strong>Circuit de validation opérateur actif :</strong> Vos saisies (commandes OAC, mirage, éclosion) restent en attente jusqu'à approbation par un administrateur. Une fois approuvées, elles apparaissent automatiquement dans le suivi du cycle.
+              </div>
+            </div>
+          )}
 
           {/* 4 Mini KPI Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
@@ -653,26 +744,36 @@ export const OACModule: React.FC<OACModuleProps> = ({
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                        {isPending ? (
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenApprove(s)}
-                              className="bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] text-white px-3 py-1 rounded-lg text-[11px] font-bold shadow-xs transition"
-                            >
-                              ✔ Approuver
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenReject(s)}
-                              className="bg-gradient-to-r from-[#922B21] to-[#E74C3C] hover:from-[#7B241C] hover:to-[#CB4335] text-white px-3 py-1 rounded-lg text-[11px] font-bold shadow-xs transition"
-                            >
-                              ✕ Rejeter
-                            </button>
-                          </div>
+                        {role === 'admin' ? (
+                          isPending ? (
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenApprove(s)}
+                                className="bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] text-white px-3 py-1 rounded-lg text-[11px] font-bold shadow-xs transition cursor-pointer"
+                              >
+                                ✔ Approuver
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReject(s)}
+                                className="bg-gradient-to-r from-[#922B21] to-[#E74C3C] hover:from-[#7B241C] hover:to-[#CB4335] text-white px-3 py-1 rounded-lg text-[11px] font-bold shadow-xs transition cursor-pointer"
+                              >
+                                ✕ Rejeter
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-500 font-medium">
+                              Traité par {s.validPar || 'admin'} {s.dateValid ? `le ${s.dateValid}` : ''}
+                            </span>
+                          )
                         ) : (
-                          <span className="text-[11px] text-slate-500 font-medium">
-                            Traité par {s.validPar || 'admin'}
+                          <span className="text-[11px] font-bold text-slate-600">
+                            {isPending 
+                              ? '⏳ En attente de validation admin' 
+                              : isApproved 
+                              ? `✔ Validé & Intégré (par ${s.validPar || 'admin'})` 
+                              : `✕ Rejeté : ${s.raison || 'Sans motif'}`}
                           </span>
                         )}
                       </td>
@@ -899,52 +1000,66 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </div>
               </div>
 
+              {/* Operator Notice */}
+              {role !== 'admin' && (
+                <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
+                  <span className="text-base">🛡️</span>
+                  <span><strong>Mode Opérateur :</strong> Cette commande sera transmise à l'administrateur pour validation avant toute intégration dans la base de données.</span>
+                </div>
+              )}
+
               {/* Action Buttons Bar */}
               <div className="flex flex-wrap items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95"
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
                   style={{
-                    background: 'linear-gradient(135deg, #1B4F72, #2E86C1)',
+                    background: role === 'admin' 
+                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)' 
+                      : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
-                  ✔ ENREGISTRER
+                  <span>{role === 'admin' ? '✔ ENREGISTRER DIRECTEMENT' : '📨 SOUMETTRE POUR VALIDATION'}</span>
                 </button>
-                <button
-                  type="button"
-                  disabled={!isSelected}
-                  onClick={handleSave}
-                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                    isSelected
-                      ? 'active:scale-95'
-                      : 'opacity-40 cursor-not-allowed'
-                  }`}
-                  style={{
-                    background: 'linear-gradient(135deg, #1E8449, #27AE60)',
-                  }}
-                >
-                  ✎ MODIFIER
-                </button>
-                <button
-                  type="button"
-                  disabled={!isSelected}
-                  onClick={handleDeleteClick}
-                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                    isSelected
-                      ? 'active:scale-95'
-                      : 'opacity-40 cursor-not-allowed'
-                  }`}
-                  style={{
-                    background: 'linear-gradient(135deg, #922B21, #E74C3C)',
-                  }}
-                >
-                  🗑 SUPPRIMER
-                </button>
+                {role === 'admin' && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!isSelected}
+                      onClick={handleSave}
+                      className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
+                        isSelected
+                          ? 'active:scale-95 cursor-pointer'
+                          : 'opacity-40 cursor-not-allowed'
+                      }`}
+                      style={{
+                        background: 'linear-gradient(135deg, #1E8449, #27AE60)',
+                      }}
+                    >
+                      ✎ MODIFIER
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isSelected}
+                      onClick={handleDeleteClick}
+                      className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
+                        isSelected
+                          ? 'active:scale-95 cursor-pointer'
+                          : 'opacity-40 cursor-not-allowed'
+                      }`}
+                      style={{
+                        background: 'linear-gradient(135deg, #922B21, #E74C3C)',
+                      }}
+                    >
+                      🗑 SUPPRIMER
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={razC}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition"
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition cursor-pointer"
                 >
                   ↺ ANNULER
                 </button>
@@ -1096,52 +1211,66 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </div>
               </div>
 
+              {/* Operator Notice */}
+              {role !== 'admin' && (
+                <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
+                  <span className="text-base">🛡️</span>
+                  <span><strong>Mode Opérateur :</strong> La déclaration de mirage sera transmise à l'administrateur pour validation avant mise à jour du lot.</span>
+                </div>
+              )}
+
               {/* Action Buttons Bar */}
               <div className="flex flex-wrap items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95"
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
                   style={{
-                    background: 'linear-gradient(135deg, #1B4F72, #2E86C1)',
+                    background: role === 'admin' 
+                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)' 
+                      : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
-                  ✔ ENREGISTRER
+                  <span>{role === 'admin' ? '✔ ENREGISTRER DIRECTEMENT' : '📨 SOUMETTRE LE MIRAGE POUR VALIDATION'}</span>
                 </button>
-                <button
-                  type="button"
-                  disabled={!isSelected}
-                  onClick={handleSave}
-                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                    isSelected
-                      ? 'active:scale-95'
-                      : 'opacity-40 cursor-not-allowed'
-                  }`}
-                  style={{
-                    background: 'linear-gradient(135deg, #1E8449, #27AE60)',
-                  }}
-                >
-                  ✎ MODIFIER
-                </button>
-                <button
-                  type="button"
-                  disabled={!isSelected}
-                  onClick={handleDeleteClick}
-                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                    isSelected
-                      ? 'active:scale-95'
-                      : 'opacity-40 cursor-not-allowed'
-                  }`}
-                  style={{
-                    background: 'linear-gradient(135deg, #922B21, #E74C3C)',
-                  }}
-                >
-                  🗑 SUPPRIMER
-                </button>
+                {role === 'admin' && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!isSelected}
+                      onClick={handleSave}
+                      className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
+                        isSelected
+                          ? 'active:scale-95 cursor-pointer'
+                          : 'opacity-40 cursor-not-allowed'
+                      }`}
+                      style={{
+                        background: 'linear-gradient(135deg, #1E8449, #27AE60)',
+                      }}
+                    >
+                      ✎ MODIFIER
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isSelected}
+                      onClick={handleDeleteClick}
+                      className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
+                        isSelected
+                          ? 'active:scale-95 cursor-pointer'
+                          : 'opacity-40 cursor-not-allowed'
+                      }`}
+                      style={{
+                        background: 'linear-gradient(135deg, #922B21, #E74C3C)',
+                      }}
+                    >
+                      🗑 SUPPRIMER
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={razM}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition"
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition cursor-pointer"
                 >
                   ↺ ANNULER
                 </button>
@@ -1310,52 +1439,66 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </div>
               </div>
 
+              {/* Operator Notice */}
+              {role !== 'admin' && (
+                <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
+                  <span className="text-base">🛡️</span>
+                  <span><strong>Mode Opérateur :</strong> La déclaration d'éclosion sera transmise à l'administrateur pour validation avant mise à jour du lot.</span>
+                </div>
+              )}
+
               {/* Action Buttons Bar */}
               <div className="flex flex-wrap items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95"
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
                   style={{
-                    background: 'linear-gradient(135deg, #1B4F72, #2E86C1)',
+                    background: role === 'admin' 
+                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)' 
+                      : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
-                  ✔ ENREGISTRER
+                  <span>{role === 'admin' ? '✔ ENREGISTRER DIRECTEMENT' : '📨 SOUMETTRE L’ÉCLOSION POUR VALIDATION'}</span>
                 </button>
-                <button
-                  type="button"
-                  disabled={!isSelected}
-                  onClick={handleSave}
-                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                    isSelected
-                      ? 'active:scale-95'
-                      : 'opacity-40 cursor-not-allowed'
-                  }`}
-                  style={{
-                    background: 'linear-gradient(135deg, #1E8449, #27AE60)',
-                  }}
-                >
-                  ✎ MODIFIER
-                </button>
-                <button
-                  type="button"
-                  disabled={!isSelected}
-                  onClick={handleDeleteClick}
-                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                    isSelected
-                      ? 'active:scale-95'
-                      : 'opacity-40 cursor-not-allowed'
-                  }`}
-                  style={{
-                    background: 'linear-gradient(135deg, #922B21, #E74C3C)',
-                  }}
-                >
-                  🗑 SUPPRIMER
-                </button>
+                {role === 'admin' && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!isSelected}
+                      onClick={handleSave}
+                      className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
+                        isSelected
+                          ? 'active:scale-95 cursor-pointer'
+                          : 'opacity-40 cursor-not-allowed'
+                      }`}
+                      style={{
+                        background: 'linear-gradient(135deg, #1E8449, #27AE60)',
+                      }}
+                    >
+                      ✎ MODIFIER
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isSelected}
+                      onClick={handleDeleteClick}
+                      className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
+                        isSelected
+                          ? 'active:scale-95 cursor-pointer'
+                          : 'opacity-40 cursor-not-allowed'
+                      }`}
+                      style={{
+                        background: 'linear-gradient(135deg, #922B21, #E74C3C)',
+                      }}
+                    >
+                      🗑 SUPPRIMER
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={razE}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition"
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition cursor-pointer"
                 >
                   ↺ ANNULER
                 </button>

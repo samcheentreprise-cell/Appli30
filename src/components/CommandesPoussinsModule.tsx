@@ -64,8 +64,37 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   // Navigation View: 'accueil' | 'dashboard' | 'nouvelle' | 'chercher'
   const [view, setView] = useState<'accueil' | 'dashboard' | 'nouvelle' | 'chercher'>('accueil');
 
-  // Form State for "Nouvelle Commande"
-  const [selDateKey, setSelDateKey] = useState<string>('04/10/2026');
+  // Price determination based on breed/product type
+  const getPriceForType = (t: string): number => {
+    const s = t.toLowerCase();
+    if (s.includes('sasso')) return 900;
+    if (s.includes('cou-nu')) return 650;
+    if (s.includes('fermier')) return 700;
+    if (s.includes('pondeuse')) return 800;
+    return 600; // Chairs
+  };
+
+  // Helper to parse French date string DD/MM/YYYY into Date
+  const parseFrDate = (str: string | undefined): Date | null => {
+    if (!str) return null;
+    const clean = str.trim();
+    if (clean.includes('/')) {
+      const parts = clean.split('/');
+      if (parts.length === 3) {
+        const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+        if (!isNaN(d.getTime())) return d;
+      }
+    }
+    if (clean.includes('-')) {
+      const d = new Date(clean);
+      if (!isNaN(d.getTime())) return d;
+    }
+    return null;
+  };
+
+  // State for "Nouvelle Commande"
+  const [selDateKey, setSelDateKey] = useState<string>('23/10/2026');
+  const [selType, setSelType] = useState<string>('Fermier');
   const [selClient, setSelClient] = useState<Client | null>(null);
   const [clientSearch, setClientSearch] = useState<string>('');
   const [showNewClientForm, setShowNewClientForm] = useState<boolean>(false);
@@ -74,7 +103,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   const [ncVille, setNcVille] = useState<string>('');
   const [ncTel, setNcTel] = useState<string>('');
   const [ncEmail, setNcEmail] = useState<string>('');
-  const [quantite, setQuantite] = useState<number>(1);
+  const [quantite, setQuantite] = useState<number>(100);
   const [notes, setNotes] = useState<string>('');
 
   // Search State for "Chercher une Commande"
@@ -101,71 +130,176 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     setTimeout(() => setNotif(null), 5000);
   };
 
-  // Hatch dates forecast & capacity data
+  // Hatch dates forecast & capacity data derived strictly from real Sheet OAC and orders
   const hatchDatesData = useMemo(() => {
     const datesMap: Record<
       string,
       {
         date: string;
         dateFormatee: string;
+        dateObj: Date | null;
         type: string;
+        typesList: Array<{ type: string; race: string; lotId: string; cartons: number; attendus: number; prix: number }>;
         prix: number;
         prevision: number;
         commande: number;
+        lots: OAC[];
+        isPast: boolean;
       }
-    > = {
-      '04/10/2026': {
-        date: '04/10/2026',
-        dateFormatee: 'dim. 4 oct. 2026',
-        type: 'Chairs',
-        prix: 600,
-        prevision: 14274,
-        commande: 0,
-      },
-      '07/10/2026': {
-        date: '07/10/2026',
-        dateFormatee: 'mer. 7 oct. 2026',
-        type: 'Chairs',
-        prix: 600,
-        prevision: 14319,
-        commande: 0,
-      },
-      '15/10/2026': {
-        date: '15/10/2026',
-        dateFormatee: 'jeu. 15 oct. 2026',
-        type: 'Chairs',
-        prix: 600,
-        prevision: 3590,
-        commande: 0,
-      },
-    };
+    > = {};
 
-    // Aggregate orders
-    commandes.forEach((cmd) => {
-      if (cmd.statut === 'Annulée') return;
-      const key = cmd.dateEclosion;
-      if (datesMap[key]) {
-        datesMap[key].commande += cmd.quantite;
-      } else if (key) {
+    const todayTime = new Date();
+    todayTime.setHours(0, 0, 0, 0);
+
+    // 1. Build from real OAC batches in the Sheet
+    oacList.forEach((oac) => {
+      if (!oac.eclosion) return;
+      const key = oac.eclosion.trim();
+      const prevQty = oac.attendus || (oac.fertiles ? Math.round(oac.fertiles * 0.8) : Math.round((oac.recus || oac.cartons * 360) * 0.75));
+      const type = oac.type || oac.race || 'Chairs';
+      const prix = getPriceForType(type);
+      const dObj = parseFrDate(key);
+      const isPast = dObj ? dObj.getTime() < todayTime.getTime() && oac.complet : false;
+
+      if (!datesMap[key]) {
         datesMap[key] = {
           date: key,
           dateFormatee: key,
-          type: cmd.typeProduit || 'Chairs',
-          prix: cmd.prixUnitaire || 600,
-          prevision: 14000,
+          dateObj: dObj,
+          type,
+          typesList: [],
+          prix,
+          prevision: 0,
+          commande: 0,
+          lots: [],
+          isPast,
+        };
+      }
+
+      datesMap[key].prevision += prevQty;
+      datesMap[key].lots.push(oac);
+
+      const existing = datesMap[key].typesList.find((t) => t.type.toLowerCase() === type.toLowerCase());
+      if (existing) {
+        existing.attendus += prevQty;
+        existing.cartons += oac.cartons || 0;
+      } else {
+        datesMap[key].typesList.push({
+          type,
+          race: oac.race || '',
+          lotId: oac.id,
+          cartons: oac.cartons || 0,
+          attendus: prevQty,
+          prix,
+        });
+      }
+
+      // Format combined type label
+      const allTypes = datesMap[key].typesList.map((t) => t.type);
+      datesMap[key].type = allTypes.join(' & ');
+    });
+
+    // 2. Aggregate orders from sheet
+    commandes.forEach((cmd) => {
+      if (cmd.statut === 'Annulée') return;
+      const key = cmd.dateEclosion?.trim();
+      if (!key) return;
+
+      if (datesMap[key]) {
+        datesMap[key].commande += cmd.quantite;
+      } else {
+        const dObj = parseFrDate(key);
+        const isPast = dObj ? dObj.getTime() < todayTime.getTime() : false;
+        const cmdType = cmd.typeProduit || 'Chairs';
+        const cmdPrix = cmd.prixUnitaire || getPriceForType(cmdType);
+
+        datesMap[key] = {
+          date: key,
+          dateFormatee: key,
+          dateObj: dObj,
+          type: cmdType,
+          typesList: [
+            {
+              type: cmdType,
+              race: '',
+              lotId: '',
+              cartons: 0,
+              attendus: 0,
+              prix: cmdPrix,
+            },
+          ],
+          prix: cmdPrix,
+          prevision: 0,
           commande: cmd.quantite,
+          lots: [],
+          isPast,
         };
       }
     });
 
-    return Object.values(datesMap);
-  }, [commandes]);
+    // Sort chronologically: active/future dates first, then past dates
+    const sorted = Object.values(datesMap).sort((a, b) => {
+      const ta = a.dateObj ? a.dateObj.getTime() : 0;
+      const tb = b.dateObj ? b.dateObj.getTime() : 0;
+      // Future dates first
+      if (a.isPast !== b.isPast) return a.isPast ? 1 : -1;
+      return ta - tb;
+    });
 
-  // Overall KPI
+    return sorted;
+  }, [oacList, commandes]);
+
+  // Active / Upcoming hatch dates (with incubator batches or future dates)
+  const activeHatchDates = useMemo(() => {
+    const list = hatchDatesData.filter((d) => !d.isPast || d.prevision > 0);
+    return list.length > 0 ? list : hatchDatesData;
+  }, [hatchDatesData]);
+
+  // Synchronize selDateKey with available active hatch dates
+  useEffect(() => {
+    if (activeHatchDates.length > 0) {
+      if (!selDateKey || !activeHatchDates.some((d) => d.date === selDateKey)) {
+        setSelDateKey(activeHatchDates[0].date);
+      }
+    }
+  }, [activeHatchDates, selDateKey]);
+
+  // Current selected hatch date info
+  const selectedHatchDate = useMemo(() => {
+    return (
+      activeHatchDates.find((d) => d.date === selDateKey) ||
+      hatchDatesData.find((d) => d.date === selDateKey) ||
+      activeHatchDates[0]
+    );
+  }, [activeHatchDates, hatchDatesData, selDateKey]);
+
+  // Synchronize selType with the selected hatch date
+  useEffect(() => {
+    if (selectedHatchDate && selectedHatchDate.typesList.length > 0) {
+      if (!selType || !selectedHatchDate.typesList.some((t) => t.type.toLowerCase() === selType.toLowerCase())) {
+        setSelType(selectedHatchDate.typesList[0].type);
+      }
+    }
+  }, [selectedHatchDate, selType]);
+
+  const currentTypeInfo = useMemo(() => {
+    if (!selectedHatchDate) return null;
+    return (
+      selectedHatchDate.typesList.find((t) => t.type.toLowerCase() === selType.toLowerCase()) ||
+      selectedHatchDate.typesList[0] ||
+      null
+    );
+  }, [selectedHatchDate, selType]);
+
+  const prixUnitaire = currentTypeInfo ? currentTypeInfo.prix : getPriceForType(selType || 'Chairs');
+  const typeProduit = selType || currentTypeInfo?.type || 'Chairs';
+  const montantTotal = quantite * prixUnitaire;
+
+  // Overall KPI across active dates
   const { totalPrevision, totalCommande, totalDisponible, tauxGlobal } = useMemo(() => {
     let prev = 0;
     let cmd = 0;
-    hatchDatesData.forEach((d) => {
+    activeHatchDates.forEach((d) => {
       prev += d.prevision;
       cmd += d.commande;
     });
@@ -177,16 +311,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       totalDisponible: dispo,
       tauxGlobal: taux,
     };
-  }, [hatchDatesData]);
-
-  // Current selected hatch date info
-  const selectedHatchDate = useMemo(() => {
-    return hatchDatesData.find((d) => d.date === selDateKey) || hatchDatesData[0];
-  }, [hatchDatesData, selDateKey]);
-
-  const prixUnitaire = selectedHatchDate ? selectedHatchDate.prix : 600;
-  const typeProduit = selectedHatchDate ? selectedHatchDate.type : 'Chairs';
-  const montantTotal = quantite * prixUnitaire;
+  }, [activeHatchDates]);
 
   // Filtered clients for selection
   const filteredClients = useMemo(() => {
@@ -598,42 +723,51 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
 
           {/* Dates d'Éclosion Cards */}
           <div className="space-y-4">
-            <h2 className="text-lg font-bold text-[#1e293b] flex items-center gap-2">
-              <span>📅</span>
-              <span>Dates d'Éclosion</span>
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-[#1e293b] flex items-center gap-2">
+                <span>📅</span>
+                <span>Dates d'Éclosion & Prévisions Poussins</span>
+              </h2>
+              <div className="text-xs font-semibold text-slate-500">
+                {activeHatchDates.length} date(s) active(s)
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {hatchDatesData.map((d) => {
-                const dispo = d.prevision - d.commande;
+              {activeHatchDates.map((d) => {
+                const dispo = Math.max(0, d.prevision - d.commande);
                 const taux = d.prevision > 0 ? Math.round((d.commande / d.prevision) * 100) : 0;
                 const progressWidth = Math.min(100, Math.max(0, taux));
 
                 return (
                   <div
                     key={d.date}
-                    className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200/80 transition hover:shadow-md hover:-translate-y-1"
+                    className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200/80 transition hover:shadow-md hover:-translate-y-1 flex flex-col justify-between"
                     style={{ borderLeft: '5px solid #10b981' }}
                   >
                     {/* Header */}
                     <div className="bg-[#f8f9fa] px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                      <span className="font-bold text-sm text-[#1e293b]">{d.dateFormatee}</span>
+                      <div>
+                        <span className="font-extrabold text-base text-[#1e293b] tracking-wide">{d.dateFormatee}</span>
+                        <span className="block text-[11px] text-slate-500 font-medium">{d.type}</span>
+                      </div>
                       <div className="flex gap-2">
                         {(() => {
                            const today = new Date();
-                           const dateParts = d.date.split('/');
-                           const hatch = new Date(parseInt(dateParts[2]), parseInt(dateParts[1])-1, parseInt(dateParts[0]));
-                           const diffDays = Math.ceil((hatch.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                           if (diffDays <= 1 && diffDays >= 0) {
-                             return (
-                               <span className="bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full text-[10px] font-bold text-amber-800 flex items-center gap-1">
-                                 ⚠️ Alerte J-{diffDays}
-                               </span>
-                             );
+                           today.setHours(0, 0, 0, 0);
+                           if (d.dateObj) {
+                             const diffDays = Math.ceil((d.dateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                             if (diffDays <= 3 && diffDays >= 0) {
+                               return (
+                                 <span className="bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full text-[10px] font-bold text-amber-800 flex items-center gap-1">
+                                   ⚠️ J-{diffDays}
+                                 </span>
+                               );
+                             }
                            }
                            return null;
                         })()}
-                        <span className="bg-white border border-slate-200 px-2.5 py-0.5 rounded-full text-xs font-bold text-emerald-600 flex items-center gap-1">
+                        <span className="bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full text-xs font-bold text-emerald-700 flex items-center gap-1">
                           <span className="w-2 h-2 rounded-full bg-emerald-500" />
                           <span>Ouvert</span>
                         </span>
@@ -641,22 +775,44 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                     </div>
 
                     {/* Body */}
-                    <div className="p-4 space-y-2.5 text-xs">
+                    <div className="p-4 space-y-3 text-xs flex-1">
+                      {/* Lots OAC in incubation breakdown */}
+                      <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-1.5">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                          <span>Lots en incubation (OAC) :</span>
+                          <span className="text-emerald-700 font-extrabold">{d.typesList.length} souche(s)</span>
+                        </div>
+                        {d.typesList.length > 0 ? (
+                          d.typesList.map((t, idx) => (
+                            <div key={idx} className="flex justify-between items-center text-[11px]">
+                              <span className="font-semibold text-slate-800">
+                                • {t.type} {t.race ? `(${t.race})` : ''} - {t.lotId}
+                              </span>
+                              <span className="font-bold text-slate-700 tabular-nums">
+                                {t.attendus.toLocaleString('fr-FR')} poussins
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-[11px] text-slate-500 italic">Lots couvoir standard</div>
+                        )}
+                      </div>
+
                       <div className="flex justify-between text-slate-600">
-                        <span className="font-medium">Prévision</span>
-                        <span className="font-bold text-slate-900 text-sm">
-                          {d.prevision.toLocaleString('fr-FR')}
+                        <span className="font-medium">Prévision Totale</span>
+                        <span className="font-black text-slate-900 text-sm tabular-nums">
+                          {d.prevision.toLocaleString('fr-FR')} poussins
                         </span>
                       </div>
                       <div className="flex justify-between text-slate-600">
-                        <span className="font-medium">Commandé</span>
-                        <span className="font-bold text-[#5b7c99] text-sm">
+                        <span className="font-medium">Commandé (Réservé)</span>
+                        <span className="font-bold text-[#5b7c99] text-sm tabular-nums">
                           {d.commande.toLocaleString('fr-FR')}
                         </span>
                       </div>
                       <div className="flex justify-between text-slate-600">
-                        <span className="font-medium">Disponible</span>
-                        <span className="font-bold text-[#10b981] text-sm">
+                        <span className="font-medium">Disponible Restant</span>
+                        <span className="font-black text-[#10b981] text-sm tabular-nums">
                           {dispo.toLocaleString('fr-FR')}
                         </span>
                       </div>
@@ -677,8 +833,25 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                         />
                       </div>
                       <div className="text-right text-[11px] font-bold text-slate-400">
-                        {taux}% rempli
+                        {taux}% réservé
                       </div>
+                    </div>
+
+                    {/* Quick booking button */}
+                    <div className="p-3 bg-slate-50 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelDateKey(d.date);
+                          if (d.typesList.length > 0) {
+                            setSelType(d.typesList[0].type);
+                          }
+                          setView('nouvelle');
+                        }}
+                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-xs"
+                      >
+                        <span>➕ Réserver pour le {d.date}</span>
+                      </button>
                     </div>
                   </div>
                 );

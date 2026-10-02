@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserRole } from '../types';
-import { Egg, RefreshCw, Shield, User, CheckCircle2, AlertCircle, LogOut } from 'lucide-react';
+import { Egg, RefreshCw, Shield, User, CheckCircle2, AlertCircle, LogOut, ExternalLink } from 'lucide-react';
 
 interface HeaderProps {
   currentRole: UserRole;
@@ -9,6 +9,7 @@ interface HeaderProps {
   onTriggerSync: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  pendingSoumissionsCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   onTriggerSync,
   activeTab,
   setActiveTab,
+  pendingSoumissionsCount = 0,
 }) => {
   const roles: UserRole[] = ['admin', 'utilisateur', 'comptable'];
 
@@ -25,7 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
   const navItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: '📊', roles: ['admin', 'comptable', 'utilisateur'] },
     { id: 'calendrier', label: 'Calendrier', icon: '📅', roles: ['utilisateur'] },
-    { id: 'commandes_poussins', label: 'Cmd Poussins', icon: '🐣', roles: ['admin', 'comptable'] },
+    { id: 'commandes_poussins', label: 'Cmd Poussins', icon: '🐣', roles: ['admin'] },
     { id: 'oac', label: 'Suivi des OAC', icon: '🥚', roles: ['admin', 'utilisateur'] },
     { id: 'ventes', label: 'Ventes', icon: '💰', roles: ['admin', 'comptable'] },
     { id: 'depenses', label: 'Dépenses', icon: '💸', roles: ['admin', 'comptable'] },
@@ -57,8 +59,8 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-            {/* Sync Indicator - Hidden for comptable */}
-            {currentRole !== 'comptable' && (
+            {/* Sync Indicator - Visible for admin only */}
+            {currentRole === 'admin' && (
               <div className="hidden sm:flex items-center gap-2 bg-sky-900/60 border border-sky-700/60 rounded-xl px-3 py-1.5 text-xs text-sky-200">
                 <div className="flex items-center gap-1.5">
                   <span className="font-semibold text-slate-200">Google Sheets:</span>
@@ -69,11 +71,22 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   onClick={onTriggerSync}
                   disabled={syncStatus.syncing}
-                  className="ml-1 p-1 hover:bg-sky-800 rounded-lg transition text-amber-400"
-                  title="Synchroniser"
+                  className="p-1 hover:bg-sky-800 rounded-lg transition text-amber-400 cursor-pointer"
+                  title="Synchroniser maintenant"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${syncStatus.syncing ? 'animate-spin' : ''}`} />
                 </button>
+                <a
+                  href="https://docs.google.com/spreadsheets/u/0/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-0.5 rounded-lg text-[11px] font-bold transition shadow-xs ml-1"
+                  title="Ouvrir le classeur Google Sheets dans un nouvel onglet"
+                >
+                  <span>📊</span>
+                  <span className="hidden md:inline">Ouvrir Sheet</span>
+                  <ExternalLink className="w-3 h-3 ml-0.5" />
+                </a>
               </div>
             )}
 
@@ -115,6 +128,11 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <span>{item.icon}</span>
                   <span>{item.label}</span>
+                  {item.id === 'oac' && pendingSoumissionsCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+                      {pendingSoumissionsCount}
+                    </span>
+                  )}
                 </button>
               );
             })}

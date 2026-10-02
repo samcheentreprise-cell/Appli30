@@ -2,15 +2,13 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 
 export const firebaseConfig = {
-  projectId: "gen-lang-client-0822992934",
-  appId: "1:957846325474:web:dc4513268088981e14b6bb",
-  apiKey: "AIzaSyDjNBHI1MoWyYuJNvGxw_cdzNcEuEujX-A",
-  authDomain: "gen-lang-client-0822992934.firebaseapp.com",
-  storageBucket: "gen-lang-client-0822992934.firebasestorage.app",
-  messagingSenderId: "957846325474",
-  measurementId: "",
-  oAuthClientId: "957846325474-nddptick8126lgsp8e190mdu8iivvld3.apps.googleusercontent.com",
-  recaptchaSiteKey: ""
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();

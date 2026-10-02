@@ -1,4 +1,28 @@
 import React, { useState, useEffect } from 'react';
+import { 
+  Database, 
+  Trash2, 
+  Mail, 
+  Settings, 
+  RefreshCw, 
+  CheckCircle2, 
+  AlertTriangle, 
+  X, 
+  Check, 
+  ShieldAlert,
+  KeyRound,
+  Activity
+} from 'lucide-react';
+import { 
+  getGSheetWebappUrl, 
+  setGSheetWebappUrl, 
+  getGSheetApiToken, 
+  setGSheetApiToken, 
+  DEFAULT_API_URL, 
+  DEFAULT_API_TOKEN,
+  ping 
+} from '../services/googleSheet';
+
 interface SyncStatus {
   syncing: boolean;
   lastSync: string;
@@ -8,12 +32,14 @@ interface SyncStatus {
 interface ParametresModuleProps {
   syncStatus: SyncStatus;
   onTriggerSync: () => void;
+  onResetAllData?: (keepGsheetUrl: boolean) => void;
   onClose?: () => void;
 }
 
 export const ParametresModule: React.FC<ParametresModuleProps> = ({
   syncStatus,
   onTriggerSync,
+  onResetAllData,
   onClose,
 }) => {
   // Alert Emails State
@@ -22,10 +48,65 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
     return stored ? JSON.parse(stored) : ['admin@couvoirsamche.com'];
   });
   const [newEmail, setNewEmail] = useState('');
+  const [gsheetUrl, setGsheetUrl] = useState(() => getGSheetWebappUrl());
+  const [apiToken, setApiToken] = useState(() => getGSheetApiToken());
+
+  // In-app UI Feedback States
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [keepGsheetUrlOnReset, setKeepGsheetUrlOnReset] = useState(true);
+  const [resetSuccessToast, setResetSuccessToast] = useState(false);
+  const [pingStatus, setPingStatus] = useState<{ testing: boolean; message?: string; success?: boolean } | null>(null);
 
   useEffect(() => {
     localStorage.setItem('alert_emails', JSON.stringify(emailList));
   }, [emailList]);
+
+  const saveGsheetUrl = () => {
+    setGSheetWebappUrl(gsheetUrl);
+    setGSheetApiToken(apiToken);
+    onTriggerSync();
+    setSaveSuccessMsg('Configuration API & Token enregistrée ! Synchronisation en cours...');
+    setTimeout(() => setSaveSuccessMsg(null), 3500);
+  };
+
+  const handleTestPing = async () => {
+    setPingStatus({ testing: true });
+    try {
+      const res = await ping();
+      if (res?.success) {
+        setPingStatus({
+          testing: false,
+          success: true,
+          message: `Connexion API réussie (Version ${res.data?.version || '1.1.1'})`
+        });
+      } else {
+        setPingStatus({
+          testing: false,
+          success: false,
+          message: `Échec de connexion : ${res?.error || 'Erreur inconnue'}`
+        });
+      }
+    } catch (e: any) {
+      setPingStatus({
+        testing: false,
+        success: false,
+        message: `Erreur réseau : ${e.message}`
+      });
+    }
+    setTimeout(() => setPingStatus(null), 5000);
+  };
+
+  const handlePasteGsheetUrl = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData('text').trim();
+    if (pasted && pasted.includes('script.google.com')) {
+      setGsheetUrl(pasted);
+      setGSheetWebappUrl(pasted);
+      onTriggerSync();
+      setSaveSuccessMsg('URL collée et synchronisation automatique déclenchée !');
+      setTimeout(() => setSaveSuccessMsg(null), 3500);
+    }
+  };
 
   const addEmail = () => {
     if (newEmail && !emailList.includes(newEmail)) {
@@ -38,72 +119,271 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
     setEmailList(emailList.filter((e) => e !== email));
   };
 
-  const clearLocalStorage = () => {
-    if (window.confirm('Voulez-vous vraiment réinitialiser toutes les données locales ?')) {
-      localStorage.clear();
-      window.location.reload();
+  const handleConfirmReset = () => {
+    if (onResetAllData) {
+      onResetAllData(keepGsheetUrlOnReset);
     }
+    if (!keepGsheetUrlOnReset) {
+      setGsheetUrl(DEFAULT_API_URL);
+      setApiToken(DEFAULT_API_TOKEN);
+    }
+    setIsResetModalOpen(false);
+    setResetSuccessToast(true);
+    setTimeout(() => setResetSuccessToast(false), 4000);
   };
 
   return (
-    <div className="bg-[#eef2f7] min-h-[85vh] rounded-3xl shadow-2xl border border-slate-300 overflow-hidden flex flex-col font-sans animate-fade-in text-sm">
+    <div className="bg-[#eef2f7] min-h-[85vh] rounded-3xl shadow-2xl border border-slate-300 overflow-hidden flex flex-col font-sans animate-fade-in text-sm relative">
+      {/* Header */}
       <div className="bg-gradient-to-r from-[#1B4F72] via-[#21618C] to-[#2E86C1] px-6 py-4 flex items-center justify-between text-white flex-shrink-0 shadow-md">
-        <h1 className="text-lg font-bold">⚙ Paramètres</h1>
-        {onClose && <button onClick={onClose} className="text-white hover:text-slate-200">✕</button>}
+        <div className="flex items-center gap-2.5">
+          <Settings className="w-5 h-5 text-sky-200" />
+          <h1 className="text-lg font-bold">⚙ Paramètres du Système</h1>
+        </div>
+        {onClose && (
+          <button 
+            onClick={onClose} 
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition font-bold"
+            title="Fermer"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
-      <div className="p-6 space-y-8">
-        {/* 1. Sync */}
-        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-          <h2 className="text-base font-bold text-slate-800 mb-4">Synchronisation</h2>
-          <div className="flex items-center justify-between">
+      {/* In-app Toast for Reset Confirmation */}
+      {resetSuccessToast && (
+        <div className="mx-6 mt-4 p-4 rounded-2xl bg-emerald-600 text-white flex items-center justify-between shadow-lg animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+            <span className="font-semibold text-xs sm:text-sm">
+              Tout le cache et les données locales ont été réinitialisés avec succès !
+            </span>
+          </div>
+          <button onClick={() => setResetSuccessToast(false)} className="text-white/80 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      <div className="p-6 space-y-6 flex-1">
+        {/* 1. Synchronisation Google Sheets */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+            <Database className="w-4 h-4 text-sky-700" />
+            <h2 className="text-base font-bold text-slate-800">Synchronisation Google Sheets</h2>
+          </div>
+          
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+              Identifiant du Classeur (Spreadsheet ID)
+            </label>
+            <input
+              type="text"
+              placeholder="Ex: 1ABC1234567890abcdefghijklmnopqrstuvwxyz"
+              className="w-full px-3.5 py-2.5 mb-4 border rounded-xl text-xs font-mono bg-slate-50 border-slate-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+              onChange={(e) => {
+                const id = e.target.value.trim();
+                if (id) {
+                  const newUrl = `https://script.google.com/macros/s/AKfycbwZLonbfs4JZLyF9WIYIwx1KbcPBH8rshwNKBeYEtwPwlxIhZkA1JmZRoWf3u4V6B_IsA/exec?id=${id}`;
+                  setGsheetUrl(newUrl);
+                }
+              }}
+            />
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+              URL de la Web App Google Apps Script
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              <input
+                type="text"
+                value={gsheetUrl}
+                onChange={(e) => setGsheetUrl(e.target.value)}
+                onPaste={handlePasteGsheetUrl}
+                placeholder="https://script.google.com/macros/s/.../exec"
+                className="flex-1 px-3.5 py-2.5 border rounded-xl text-xs font-mono bg-slate-50 border-slate-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+              Clé d'authentification API (Token statique)
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2 mb-2">
+              <div className="relative flex-1">
+                <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  value={apiToken}
+                  onChange={(e) => setApiToken(e.target.value)}
+                  placeholder="samche_..."
+                  className="w-full pl-9 pr-3.5 py-2.5 border rounded-xl text-xs font-mono bg-slate-50 border-slate-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+              <button 
+                onClick={handleTestPing}
+                disabled={pingStatus?.testing}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer shrink-0 border border-slate-300"
+              >
+                <Activity className={`w-3.5 h-3.5 ${pingStatus?.testing ? 'animate-pulse text-sky-600' : 'text-slate-600'}`} />
+                <span>{pingStatus?.testing ? 'Test...' : 'Tester (Ping)'}</span>
+              </button>
+              <button 
+                onClick={saveGsheetUrl} 
+                className="px-5 py-2.5 bg-[#1B4F72] hover:bg-[#153e5a] text-white rounded-xl font-bold text-xs transition cursor-pointer shrink-0 shadow-sm"
+              >
+                Enregistrer
+              </button>
+            </div>
+
+            {pingStatus?.message && (
+              <div className={`p-2.5 rounded-xl text-xs flex items-center gap-2 mt-2 font-medium ${
+                pingStatus.success 
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+              }`}>
+                {pingStatus.success ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                <span>{pingStatus.message}</span>
+              </div>
+            )}
+
+            {saveSuccessMsg && (
+              <p className="text-xs text-emerald-600 font-semibold mt-1.5 flex items-center gap-1">
+                <Check className="w-3.5 h-3.5" />
+                {saveSuccessMsg}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
             <div>
-              <p className="text-sm font-semibold text-slate-600">Dernière synchronisation : {syncStatus.lastSync}</p>
-              {syncStatus.error && <p className="text-xs text-rose-500 mt-1">{syncStatus.error}</p>}
+              <p className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+                <span>Dernière synchronisation :</span>
+                <span className="font-bold text-slate-800">{syncStatus.lastSync || 'Non effectuée'}</span>
+              </p>
+              {syncStatus.error && (
+                <p className="text-xs text-rose-600 mt-1">{syncStatus.error}</p>
+              )}
             </div>
             <button
               onClick={onTriggerSync}
-              className="px-4 py-2 bg-[#27AE60] hover:bg-[#1E8449] text-white rounded-lg font-bold text-xs uppercase"
+              disabled={syncStatus.syncing}
+              className="px-5 py-2.5 bg-[#27AE60] hover:bg-[#1E8449] disabled:opacity-50 text-white rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer shrink-0"
             >
-              {syncStatus.syncing ? 'Synchronisation...' : 'Synchroniser maintenant'}
+              <RefreshCw className={`w-3.5 h-3.5 ${syncStatus.syncing ? 'animate-spin' : ''}`} />
+              <span>{syncStatus.syncing ? 'Synchronisation...' : 'Synchroniser maintenant'}</span>
             </button>
           </div>
         </section>
 
-        {/* 2. Emails */}
-        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-          <h2 className="text-base font-bold text-slate-800 mb-4">Alertes Email</h2>
-          <div className="flex gap-2 mb-4">
+        {/* 2. Alertes Email */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+            <Mail className="w-4 h-4 text-amber-600" />
+            <h2 className="text-base font-bold text-slate-800">Alertes Email & Notifications</h2>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2">
             <input
               type="email"
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
               placeholder="nouvelle.alerte@couvoir.com"
-              className="flex-1 px-3 py-2 border rounded-lg"
+              className="flex-1 px-3.5 py-2 border rounded-xl text-xs bg-slate-50 border-slate-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
             />
-            <button onClick={addEmail} className="px-4 py-2 bg-[#1B4F72] text-white rounded-lg font-bold text-xs">
+            <button 
+              onClick={addEmail} 
+              className="px-4 py-2 bg-[#1B4F72] hover:bg-[#153e5a] text-white rounded-xl font-bold text-xs transition cursor-pointer"
+            >
               Ajouter
             </button>
           </div>
+
           <div className="space-y-2">
             {emailList.map((email) => (
-              <div key={email} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border">
-                <span className="text-sm text-slate-700">{email}</span>
-                <button onClick={() => removeEmail(email)} className="text-rose-500 font-bold text-xs">Supprimer</button>
+              <div key={email} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                <span className="text-xs font-medium text-slate-700">{email}</span>
+                <button 
+                  onClick={() => removeEmail(email)} 
+                  className="text-rose-500 hover:text-rose-700 font-bold text-xs px-2 py-1 rounded-lg hover:bg-rose-50 transition cursor-pointer"
+                >
+                  Supprimer
+                </button>
               </div>
             ))}
           </div>
         </section>
 
-        {/* 3. Maintenance */}
-        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-          <h2 className="text-base font-bold text-slate-800 mb-4">Système</h2>
-          <button onClick={clearLocalStorage} className="px-4 py-2 bg-rose-600 text-white rounded-lg font-bold text-xs">
-            Réinitialiser tout le cache local
-          </button>
-          <p className="text-xs text-slate-500 mt-3">Version actuelle : 1.0.48</p>
+        {/* 3. Maintenance & Nettoyage du Cache */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-rose-100 space-y-3">
+          <div className="flex items-center gap-2 border-b border-rose-100 pb-3">
+            <Trash2 className="w-4 h-4 text-rose-600" />
+            <h2 className="text-base font-bold text-slate-800">Maintenance & Données Locales</h2>
+          </div>
+
+          <p className="text-xs text-slate-600 leading-relaxed">
+            La réinitialisation efface toutes les données en mémoire cache locale de l'appareil (commandes, factures, dépenses) et recharge les données d'origine sans affecter votre fichier Google Sheets.
+          </p>
+
+          <div className="pt-2">
+            <button 
+              onClick={() => setIsResetModalOpen(true)} 
+              className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs transition shadow-sm hover:shadow flex items-center gap-2 cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Réinitialiser tout le cache local</span>
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-400 pt-1">Couvoir SAMCHE • Version 1.0.49</p>
         </section>
       </div>
+
+      {/* In-App Confirmation Modal (Replaces window.confirm) */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-3 rounded-2xl bg-rose-100 text-rose-600 shrink-0">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Réinitialiser le cache local ?
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Cette action va réinitialiser les formulaires et les listes locales de l'application à leur état initial.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs space-y-2">
+              <label className="flex items-center gap-2 text-slate-700 cursor-pointer font-medium select-none">
+                <input
+                  type="checkbox"
+                  checked={keepGsheetUrlOnReset}
+                  onChange={(e) => setKeepGsheetUrlOnReset(e.target.checked)}
+                  className="rounded text-sky-600 focus:ring-sky-500 w-4 h-4"
+                />
+                <span>Conserver l'URL de connexion Google Sheets actuelle</span>
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                onClick={() => setIsResetModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-semibold transition cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleConfirmReset}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-sm cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Confirmer la réinitialisation</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

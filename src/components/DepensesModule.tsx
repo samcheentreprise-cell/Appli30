@@ -6,7 +6,7 @@ export const CATEGORIES_SOUS_CATEGORIES: {
   items: { sousCategorie: string; idRequis?: boolean }[];
 }[] = [
   {
-    categorie: 'APPROVISIONNEMENT',
+    categorie: 'Approvisionnement',
     items: [
       { sousCategorie: "Achat d'œufs à couver", idRequis: true },
       { sousCategorie: "Transport des œufs", idRequis: true },
@@ -16,7 +16,7 @@ export const CATEGORIES_SOUS_CATEGORIES: {
     ],
   },
   {
-    categorie: 'PERSONNEL',
+    categorie: 'Personnel',
     items: [
       { sousCategorie: "Salaires opérateurs production" },
       { sousCategorie: "Salaires personnel admin" },
@@ -25,7 +25,7 @@ export const CATEGORIES_SOUS_CATEGORIES: {
     ],
   },
   {
-    categorie: 'LOCAUX/SÉCURITÉ',
+    categorie: 'Locaux/Sécurité',
     items: [
       { sousCategorie: "Location couvoir" },
       { sousCategorie: "Gardiennage 24h" },
@@ -33,64 +33,71 @@ export const CATEGORIES_SOUS_CATEGORIES: {
     ],
   },
   {
-    categorie: 'SERVICES EXTERNES',
+    categorie: 'Services externes',
     items: [
-      { sousCategorie: "Honoraires comptable & juridique" },
-      { sousCategorie: "Assurances exploitation" },
-      { sousCategorie: "Transit & dédouanement", idRequis: true },
+      { sousCategorie: "Nettoyage locaux" },
+      { sousCategorie: "Enlèvement déchets" },
+      { sousCategorie: "Fournitures admin diverses" },
     ],
   },
   {
-    categorie: 'ÉNERGIE & CARBURANT',
+    categorie: 'Énergie',
     items: [
-      { sousCategorie: "Gasoil groupe électrogène" },
-      { sousCategorie: "Électricité EDM" },
-      { sousCategorie: "Gaz butane" },
-      { sousCategorie: "Carburant véhicules" },
+      { sousCategorie: "Électricité" },
+      { sousCategorie: "Carburant" },
+      { sousCategorie: "Huile/lubrifiants" },
     ],
   },
   {
-    categorie: 'ALIMENTATION & INTRANTS',
+    categorie: 'Maintenance',
     items: [
-      { sousCategorie: "Aliment démarrage poussins" },
-      { sousCategorie: "Aliment croissance" },
-      { sousCategorie: "Compléments nutritionnels" },
+      { sousCategorie: "Entretien courant machines" },
+      { sousCategorie: "Remplacement pièces usées" },
+      { sousCategorie: "Réparations techniques" },
+      { sousCategorie: "Produits désinfection" },
+      { sousCategorie: "Petits outils/consommables" },
     ],
   },
   {
-    categorie: 'VÉTÉRINAIRE & HYGIÈNE',
+    categorie: 'Investissements',
     items: [
-      { sousCategorie: "Vaccins aviaires" },
-      { sousCategorie: "Antibiotiques & vitamines" },
-      { sousCategorie: "Désinfectants couvoir" },
+      { sousCategorie: "Amortissement incubateurs" },
+      { sousCategorie: "Amortissement bâtiments" },
+      { sousCategorie: "Achat nouveaux équipements" },
+      { sousCategorie: "Travaux construction/rénovation" },
     ],
   },
   {
-    categorie: 'MAINTENANCE & ÉQUIPEMENTS',
+    categorie: 'Commercial',
     items: [
-      { sousCategorie: "Maintenance incubateurs" },
-      { sousCategorie: "Pièces détachées" },
-      { sousCategorie: "Entretien bâtiment" },
+      { sousCategorie: "Publicité/marketing digital" },
+      { sousCategorie: "Études marché/prospection" },
     ],
   },
   {
-    categorie: 'ADMINISTRATIF & DIVERS',
+    categorie: 'Administration',
     items: [
-      { sousCategorie: "Fournitures bureau" },
-      { sousCategorie: "Impôts & taxes" },
-      { sousCategorie: "Téléphonie & internet" },
-      { sousCategorie: "Imprévus & divers" },
+      { sousCategorie: "Frais administratifs" },
+      { sousCategorie: "Télécom & Internet" },
+      { sousCategorie: "Impôts et taxes" },
+    ],
+  },
+  {
+    categorie: 'Finance',
+    items: [
+      { sousCategorie: "Frais bancaires" },
+      { sousCategorie: "Agios & commissions" },
     ],
   },
 ];
 
 export const SOURCES_PAIEMENT = [
+  'Caisse',
   'Coris Banque',
-  'Caisse principale',
   'Orange Money',
   'Moov Money',
-  'Banque BOA',
-  'Caisse secondaire',
+  'Espèces',
+  'Virement',
 ];
 
 interface DepensesModuleProps {

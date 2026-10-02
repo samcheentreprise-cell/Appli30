@@ -1156,7 +1156,7 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                             <button
                               type="button"
                               onClick={() => {
-                                if (f.ligne && onDeleteFacture && confirm(`Supprimer la facture ${f.numero} ?`)) {
+                                if (f.ligne && onDeleteFacture) {
                                   onDeleteFacture(f.ligne);
                                   showMsg(`Facture ${f.numero} supprimée.`, true);
                                 }
@@ -1388,7 +1388,7 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (c.index && onDeleteClient && confirm(`Supprimer le client ${c.label} ?`)) {
+                                  if (c.index && onDeleteClient) {
                                     onDeleteClient(c.index);
                                     showMsg(`Client ${c.label} supprimé.`, true);
                                   }

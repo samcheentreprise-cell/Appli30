@@ -12,6 +12,7 @@ import {
   INITIAL_BORDEREAUX,
   getStoredData,
   setStoredData,
+  clearAllAppCache,
 } from './data/initialData';
 import { fetchGoogleSheetsData, syncPushToGoogleSheets, SyncResult } from './services/googleSheet';
 import { Header } from './components/Header';
@@ -124,19 +125,28 @@ export default function App() {
   }, [bordereaux]);
 
   // Handlers for OAC
-  const handleAddOAC = (newOac: OAC) => {
+  const handleAddOAC = async (newOac: OAC) => {
     setOacList((prev) => [newOac, ...prev]);
-    syncPushToGoogleSheets({ type: 'oac', action: 'insert', item: newOac });
+    const res = await syncPushToGoogleSheets({ type: 'oac', action: 'insert', item: newOac });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleUpdateOAC = (updated: OAC) => {
+  const handleUpdateOAC = async (updated: OAC) => {
     setOacList((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-    syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleDeleteOAC = (id: string) => {
+  const handleDeleteOAC = async (id: string) => {
     setOacList((prev) => prev.filter((item) => item.id !== id));
-    syncPushToGoogleSheets({ type: 'oac', action: 'delete', item: { id } });
+    const res = await syncPushToGoogleSheets({ type: 'oac', action: 'delete', item: { id } });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
   // Admin validation handlers
@@ -151,14 +161,21 @@ export default function App() {
           ? {
               ...s,
               statut: 'Approuvé',
-              validPar: currentRole === 'Administrateur' ? 'admin' : currentRole,
+              validPar: currentRole === 'admin' ? 'Administrateur' : currentRole,
               dateValid: todayStr,
             }
           : s
       )
     );
 
-    // If it's a Commande, insert it into real OAC list!
+    // Sync approval to Google Sheets
+    syncPushToGoogleSheets({ 
+      type: 'en_attente', 
+      action: 'update', 
+      item: { idSoumission, statut: 'Approuvé', validPar: 'Administrateur', dateValid: todayStr } 
+    });
+
+    // 1. If it's a Commande, insert it into real OAC list!
     if (target.type === 'Commande' && target.donnees) {
       const d = target.donnees;
       const dateParts = (d.date || '').split('-');
@@ -171,7 +188,7 @@ export default function App() {
       const newOrder: OAC = {
         _v: 25,
         ligne: oacList.length + 3,
-        id: idChoisi,
+        id: idChoisi || `OAC-2609-00${oacList.length + 1}`,
         date: formattedDate,
         type: d.type || 'Chairs',
         race: d.race || 'Ross 308',
@@ -190,6 +207,40 @@ export default function App() {
       };
 
       setOacList((prev) => [newOrder, ...prev]);
+      syncPushToGoogleSheets({ type: 'oac', action: 'insert', item: newOrder });
+    }
+
+    // 2. If it's a Mirage, update clairs and fertiles on existing OAC!
+    if (target.type === 'Mirage' && target.donnees) {
+      const d = target.donnees;
+      const existing = oacList.find((x) => x.id === d.id);
+      if (existing) {
+        const updated: OAC = {
+          ...existing,
+          clairs: d.clairs != null ? Number(d.clairs) : existing.clairs,
+          fertiles: d.fertiles != null ? Number(d.fertiles) : existing.fertiles,
+        };
+        setOacList((prev) => prev.map((x) => (x.id === d.id ? updated : x)));
+        syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
+      }
+    }
+
+    // 3. If it's an Éclosion, update chicks metrics on existing OAC!
+    if (target.type === 'Éclosion' && target.donnees) {
+      const d = target.donnees;
+      const existing = oacList.find((x) => x.id === d.id);
+      if (existing) {
+        const updated: OAC = {
+          ...existing,
+          commerciaux: d.commerciaux != null ? Number(d.commerciaux) : existing.commerciaux,
+          nes: d.commerciaux != null ? Number(d.commerciaux) : existing.nes,
+          handicapes: d.handicapes != null ? Number(d.handicapes) : existing.handicapes,
+          morts: d.morts != null ? Number(d.morts) : existing.morts,
+          pourVente: d.pourVente != null ? Number(d.pourVente) : existing.pourVente,
+        };
+        setOacList((prev) => prev.map((x) => (x.id === d.id ? updated : x)));
+        syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
+      }
     }
   };
 
@@ -201,13 +252,23 @@ export default function App() {
           ? {
               ...s,
               statut: 'Rejeté',
-              validPar: currentRole === 'Administrateur' ? 'admin' : currentRole,
+              validPar: currentRole === 'admin' ? 'Administrateur' : currentRole,
               dateValid: todayStr,
               raison,
             }
           : s
       )
     );
+    syncPushToGoogleSheets({ 
+      type: 'en_attente', 
+      action: 'update', 
+      item: { idSoumission, statut: 'Rejeté', validPar: 'Administrateur', dateValid: todayStr, raison } 
+    });
+  };
+
+  const handleAddSoumission = (newSoumission: SoumissionEnAttente) => {
+    setSoumissions((prev) => [newSoumission, ...prev]);
+    syncPushToGoogleSheets({ type: 'en_attente', action: 'insert', item: newSoumission });
   };
 
   const handleRefreshSoumissions = () => {
@@ -215,9 +276,12 @@ export default function App() {
   };
 
   // Handlers for Factures & Depenses
-  const handleAddFacture = (newFacture: Facture) => {
+  const handleAddFacture = async (newFacture: Facture) => {
     setFactures((prev) => [newFacture, ...prev]);
-    syncPushToGoogleSheets({ type: 'factures', action: 'insert', item: newFacture });
+    const res = await syncPushToGoogleSheets({ type: 'factures', action: 'insert', item: newFacture });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
   const handleUpdateFactureStatut = (numero: string, statut: 'Payée' | 'Emise') => {
@@ -234,101 +298,171 @@ export default function App() {
     );
   };
 
-  const handleAddDepense = (newDepense: Depense) => {
+  const handleAddDepense = async (newDepense: Depense) => {
     setDepenses((prev) => [newDepense, ...prev]);
-    syncPushToGoogleSheets({ type: 'depenses', action: 'insert', item: newDepense });
+    const res = await syncPushToGoogleSheets({ type: 'depenses', action: 'insert', item: newDepense });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleUpdateDepense = (updated: Depense) => {
+  const handleUpdateDepense = async (updated: Depense) => {
     setDepenses((prev) =>
       prev.map((d) => (d.ligne === updated.ligne ? updated : d))
     );
-    syncPushToGoogleSheets({ type: 'depenses', action: 'update', item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'depenses', action: 'update', item: updated });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleDeleteDepense = (ligne: number) => {
+  const handleDeleteDepense = async (ligne: number) => {
     setDepenses((prev) => prev.filter((d) => d.ligne !== ligne));
-    syncPushToGoogleSheets({ type: 'depenses', action: 'delete', item: { ligne } });
+    const res = await syncPushToGoogleSheets({ type: 'depenses', action: 'delete', item: { ligne } });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleAddVente = (newVente: Vente) => {
+  const handleAddVente = async (newVente: Vente) => {
     setVentes((prev) => [newVente, ...prev]);
-    syncPushToGoogleSheets({ type: 'ventes' as any, action: 'insert', item: newVente });
+    const res = await syncPushToGoogleSheets({ type: 'ventes' as any, action: 'insert', item: newVente });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleUpdateVente = (updated: Vente) => {
+  const handleUpdateVente = async (updated: Vente) => {
     setVentes((prev) =>
       prev.map((v) => (v.ligne === updated.ligne ? updated : v))
     );
-    syncPushToGoogleSheets({ type: 'ventes' as any, action: 'update', item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'ventes' as any, action: 'update', item: updated });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleDeleteVente = (ligne: number) => {
+  const handleDeleteVente = async (ligne: number) => {
     setVentes((prev) => prev.filter((v) => v.ligne !== ligne));
-    syncPushToGoogleSheets({ type: 'ventes' as any, action: 'delete', item: { ligne } });
+    const res = await syncPushToGoogleSheets({ type: 'ventes' as any, action: 'delete', item: { ligne } });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleAddMouvementCaisse = (mvt: MouvementCaisse) => {
+  const handleAddMouvementCaisse = async (mvt: MouvementCaisse) => {
     setMouvementsCaisse((prev) => [mvt, ...prev]);
-    syncPushToGoogleSheets({ type: 'caisse' as any, action: 'insert', item: mvt });
+    const res = await syncPushToGoogleSheets({ type: 'caisse' as any, action: 'insert', item: mvt });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleUpdateMouvementCaisse = (updated: MouvementCaisse) => {
+  const handleUpdateMouvementCaisse = async (updated: MouvementCaisse) => {
     setMouvementsCaisse((prev) =>
       prev.map((m) => (m.ligne === updated.ligne ? updated : m))
     );
-    syncPushToGoogleSheets({ type: 'caisse' as any, action: 'update', item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'caisse' as any, action: 'update', item: updated });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleDeleteMouvementCaisse = (ligne: number) => {
+  const handleDeleteMouvementCaisse = async (ligne: number) => {
     setMouvementsCaisse((prev) => prev.filter((m) => m.ligne !== ligne));
-    syncPushToGoogleSheets({ type: 'caisse' as any, action: 'delete', item: { ligne } });
+    const res = await syncPushToGoogleSheets({ type: 'caisse' as any, action: 'delete', item: { ligne } });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleAddCommandePoussin = (cmd: CommandePoussin) => {
+  const handleAddCommandePoussin = async (cmd: CommandePoussin) => {
     setCommandesPoussins((prev) => [cmd, ...prev]);
-    syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'insert', item: cmd });
+    const res = await syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'insert', item: cmd });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleUpdateCommandePoussin = (updated: CommandePoussin) => {
+  const handleUpdateCommandePoussin = async (updated: CommandePoussin) => {
     setCommandesPoussins((prev) =>
       prev.map((c) => (c.id === updated.id ? updated : c))
     );
-    syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'update', item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'update', item: updated });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleDeleteCommandePoussin = (id: string) => {
+  const handleDeleteCommandePoussin = async (id: string) => {
+    const target = commandesPoussins.find((c) => c.id === id);
     setCommandesPoussins((prev) => prev.filter((c) => c.id !== id));
-    syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'delete', item: { id } });
+    const res = await syncPushToGoogleSheets({ 
+      type: 'commandes_poussins' as any, 
+      action: 'delete', 
+      item: { id, rowIndex: (target as any)?.rowIndex || 2 } 
+    });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleAddClient = (newClient: Client) => {
+  const handleAddClient = async (newClient: Client) => {
     setClients((prev) => [newClient, ...prev]);
-    syncPushToGoogleSheets({ type: 'clients', action: 'insert', item: newClient });
+    const res = await syncPushToGoogleSheets({ type: 'clients', action: 'insert', item: newClient });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleUpdateClient = (updated: Client) => {
+  const handleUpdateClient = async (updated: Client) => {
     setClients((prev) => prev.map((c) => (c.index === updated.index ? updated : c)));
-    syncPushToGoogleSheets({ type: 'clients', action: 'update' as any, item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'clients', action: 'update' as any, item: updated });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleDeleteClient = (index: number) => {
+  const handleDeleteClient = async (index: number) => {
     setClients((prev) => prev.filter((c) => c.index !== index));
-    syncPushToGoogleSheets({ type: 'clients', action: 'delete' as any, item: { index } });
+    const res = await syncPushToGoogleSheets({ type: 'clients', action: 'delete' as any, item: { index } });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleUpdateFacture = (updated: Facture) => {
+  const handleUpdateFacture = async (updated: Facture) => {
     setFactures((prev) => prev.map((f) => (f.ligne === updated.ligne ? updated : f)));
-    syncPushToGoogleSheets({ type: 'factures' as any, action: 'update', item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'factures' as any, action: 'update', item: updated });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
-  const handleDeleteFacture = (ligne: number) => {
+  const handleDeleteFacture = async (ligne: number) => {
     setFactures((prev) => prev.filter((f) => f.ligne !== ligne));
-    syncPushToGoogleSheets({ type: 'factures' as any, action: 'delete', item: { ligne } });
+    const res = await syncPushToGoogleSheets({ type: 'factures' as any, action: 'delete', item: { ligne } });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
   const handleAddBordereau = (bl: Bordereau) => {
     setBordereaux((prev) => [bl, ...prev]);
+  };
+
+  // Reset all local cache and restore initial seed data in React state
+  const handleResetAllLocalData = (keepGsheetUrl: boolean = true) => {
+    clearAllAppCache(keepGsheetUrl);
+    setOacList(INITIAL_OAC);
+    setSoumissions(INITIAL_SOUMISSIONS);
+    setDepenses(INITIAL_DEPENSES);
+    setClients(INITIAL_CLIENTS);
+    setFactures(INITIAL_FACTURES);
+    setVentes(INITIAL_VENTES);
+    setMouvementsCaisse(INITIAL_CAISSE);
+    setCommandesPoussins(INITIAL_COMMANDES_POUSSINS);
+    setBordereaux(INITIAL_BORDEREAUX);
   };
 
   // Trigger Google Sheets Sync
@@ -341,7 +475,55 @@ export default function App() {
       lastSync: result.timestamp,
       error: result.success ? undefined : result.message,
     });
+
+    // Automatically update all in-memory and local data strictly from Google Sheets
+    if (result.success && result.parsedData) {
+      if (result.parsedData.oacList !== undefined) {
+        setOacList(result.parsedData.oacList);
+      }
+      if (result.parsedData.commandesPoussins !== undefined) {
+        setCommandesPoussins(result.parsedData.commandesPoussins);
+      }
+      if (result.parsedData.ventes !== undefined) {
+        setVentes(result.parsedData.ventes);
+      }
+      if (result.parsedData.depenses !== undefined) {
+        setDepenses(result.parsedData.depenses);
+      }
+      if (result.parsedData.mouvementsCaisse !== undefined) {
+        setMouvementsCaisse(result.parsedData.mouvementsCaisse);
+      }
+      if (result.parsedData.clients !== undefined && result.parsedData.clients.length > 0) {
+        setClients(result.parsedData.clients);
+      }
+      if (result.parsedData.factures !== undefined) {
+        setFactures(result.parsedData.factures);
+      }
+      if (result.parsedData.bordereaux !== undefined) {
+        setBordereaux(result.parsedData.bordereaux);
+      }
+      if (result.parsedData.soumissions !== undefined) {
+        setSoumissions(result.parsedData.soumissions);
+      }
+    }
   };
+
+  // Auto-sync on startup to ensure only real Google Sheet data is displayed
+  useEffect(() => {
+    handleTriggerSync();
+  }, []);
+
+  // Automatically trigger sync when Google Sheets URL is changed anywhere in the app
+  useEffect(() => {
+    const handleUrlChanged = () => {
+      console.log('Detected Google Sheets URL modification. Launching automatic sync...');
+      handleTriggerSync();
+    };
+    window.addEventListener('gsheet_url_changed', handleUrlChanged);
+    return () => {
+      window.removeEventListener('gsheet_url_changed', handleUrlChanged);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
@@ -353,6 +535,7 @@ export default function App() {
         onTriggerSync={() => setSyncModalOpen(true)}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        pendingSoumissionsCount={soumissions.filter((s) => s.statut === 'En attente').length}
       />
 
       {/* Main Container */}
@@ -364,6 +547,7 @@ export default function App() {
             onAddOAC={handleAddOAC}
             onUpdateOAC={handleUpdateOAC}
             onDeleteOAC={handleDeleteOAC}
+            onAddSoumission={handleAddSoumission}
             onApproveSoumission={handleApproveSoumission}
             onRejectSoumission={handleRejectSoumission}
             onRefreshSoumissions={handleRefreshSoumissions}
@@ -373,7 +557,11 @@ export default function App() {
         )}
 
         {activeTab === 'calendrier' && (
-          <CalendrierModule oacList={oacList} />
+          <CalendrierModule 
+            oacList={oacList} 
+            onNavigate={(tab) => setActiveTab(tab)}
+            onClose={() => setActiveTab('dashboard')}
+          />
         )}
         
         {activeTab === 'dashboard' && currentRole !== 'utilisateur' && (
@@ -480,6 +668,7 @@ export default function App() {
           <ParametresModule
             syncStatus={syncStatus}
             onTriggerSync={() => setSyncModalOpen(true)}
+            onResetAllData={handleResetAllLocalData}
             onClose={() => setActiveTab('dashboard')}
           />
         )}
