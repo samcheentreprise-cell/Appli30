@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { OAC, Depense, Client, Facture, UserRole, SoumissionEnAttente, Vente, MouvementCaisse, CommandePoussin, Bordereau } from './types';
+import { playAlertSound } from './utils/audio';
 import {
   INITIAL_OAC,
   INITIAL_DEPENSES,
@@ -20,6 +21,7 @@ import { Dashboard } from './components/Dashboard';
 import { OACModule } from './components/OACModule';
 import { CalendrierModule } from './components/CalendrierModule';
 import { CommandesPoussinsModule } from './components/CommandesPoussinsModule';
+import { LivraisonsPoussinsModule } from './components/LivraisonsPoussinsModule';
 import { VentesModule } from './components/VentesModule';
 import { FacturesModule } from './components/FacturesModule';
 import { DepensesModule } from './components/DepensesModule';
@@ -31,7 +33,7 @@ import { SyncModal } from './components/SyncModal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
-  const [currentRole, setCurrentRole] = useState<UserRole>('Administrateur');
+  const [currentRole, setCurrentRole] = useState<UserRole>('admin');
 
   // Update tab when role changes
   useEffect(() => {
@@ -150,11 +152,13 @@ export default function App() {
   };
 
   // Admin validation handlers
-  const handleApproveSoumission = (idSoumission: string, idChoisi: string) => {
+  const handleApproveSoumission = (idSoumission: string, idChoisi: string, modifiedDonnees?: any) => {
     const target = soumissions.find((s) => s.idSoumission === idSoumission);
     if (!target) return;
 
     const todayStr = new Date().toLocaleDateString('fr-FR');
+    const d = modifiedDonnees || target.donnees || {};
+
     setSoumissions((prev) =>
       prev.map((s) =>
         s.idSoumission === idSoumission
@@ -163,6 +167,7 @@ export default function App() {
               statut: 'Approuvé',
               validPar: currentRole === 'admin' ? 'Administrateur' : currentRole,
               dateValid: todayStr,
+              donnees: d,
             }
           : s
       )
@@ -175,9 +180,10 @@ export default function App() {
       item: { idSoumission, statut: 'Approuvé', validPar: 'Administrateur', dateValid: todayStr } 
     });
 
+    playAlertSound('success');
+
     // 1. If it's a Commande, insert it into real OAC list!
-    if (target.type === 'Commande' && target.donnees) {
-      const d = target.donnees;
+    if (target.type === 'Commande') {
       const dateParts = (d.date || '').split('-');
       const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : todayStr;
       const cartons = Number(d.cartons) || 10;
@@ -188,7 +194,7 @@ export default function App() {
       const newOrder: OAC = {
         _v: 25,
         ligne: oacList.length + 3,
-        id: idChoisi || `OAC-2609-00${oacList.length + 1}`,
+        id: idChoisi || d.id || `OAC-2609-00${oacList.length + 1}`,
         date: formattedDate,
         type: d.type || 'Chairs',
         race: d.race || 'Ross 308',
@@ -211,34 +217,43 @@ export default function App() {
     }
 
     // 2. If it's a Mirage, update clairs and fertiles on existing OAC!
-    if (target.type === 'Mirage' && target.donnees) {
-      const d = target.donnees;
-      const existing = oacList.find((x) => x.id === d.id);
+    if (target.type === 'Mirage') {
+      const targetId = d.id || (target.donnees && target.donnees.id);
+      const existing = oacList.find((x) => x.id === targetId);
       if (existing) {
+        const cubes = existing.cubes || ((existing.cartons || 0) * 360 - (existing.nbCasses || 0));
+        const clairsNum = Number(d.clairs) || 0;
+        const fertilesNum = Math.max(0, cubes - clairsNum);
         const updated: OAC = {
           ...existing,
-          clairs: d.clairs != null ? Number(d.clairs) : existing.clairs,
-          fertiles: d.fertiles != null ? Number(d.fertiles) : existing.fertiles,
+          clairs: clairsNum,
+          fertiles: fertilesNum,
         };
-        setOacList((prev) => prev.map((x) => (x.id === d.id ? updated : x)));
+        setOacList((prev) => prev.map((x) => (x.id === targetId ? updated : x)));
         syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
       }
     }
 
     // 3. If it's an Éclosion, update chicks metrics on existing OAC!
-    if (target.type === 'Éclosion' && target.donnees) {
-      const d = target.donnees;
-      const existing = oacList.find((x) => x.id === d.id);
+    if (target.type === 'Éclosion') {
+      const targetId = d.id || (target.donnees && target.donnees.id);
+      const existing = oacList.find((x) => x.id === targetId);
       if (existing) {
+        const commNum = Number(d.commerciaux) || 0;
+        const hanNum = Number(d.handicapes) || 0;
+        const morNum = Number(d.morts) || 0;
+        const pourVenteNum = Number(d.pourVente) || commNum;
+
         const updated: OAC = {
           ...existing,
-          commerciaux: d.commerciaux != null ? Number(d.commerciaux) : existing.commerciaux,
-          nes: d.commerciaux != null ? Number(d.commerciaux) : existing.nes,
-          handicapes: d.handicapes != null ? Number(d.handicapes) : existing.handicapes,
-          morts: d.morts != null ? Number(d.morts) : existing.morts,
-          pourVente: d.pourVente != null ? Number(d.pourVente) : existing.pourVente,
+          commerciaux: commNum,
+          nes: commNum,
+          handicapes: hanNum,
+          morts: morNum,
+          pourVente: pourVenteNum,
+          complet: true,
         };
-        setOacList((prev) => prev.map((x) => (x.id === d.id ? updated : x)));
+        setOacList((prev) => prev.map((x) => (x.id === targetId ? updated : x)));
         syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
       }
     }
@@ -246,6 +261,8 @@ export default function App() {
 
   const handleRejectSoumission = (idSoumission: string, raison: string) => {
     const todayStr = new Date().toLocaleDateString('fr-FR');
+    // Play rejection sound on mobile & desktop
+    playAlertSound('rejection');
     setSoumissions((prev) =>
       prev.map((s) =>
         s.idSoumission === idSoumission
@@ -264,6 +281,11 @@ export default function App() {
       action: 'update', 
       item: { idSoumission, statut: 'Rejeté', validPar: 'Administrateur', dateValid: todayStr, raison } 
     });
+  };
+
+  const handleUpdateSoumission = (updated: SoumissionEnAttente) => {
+    setSoumissions((prev) => prev.map((s) => (s.idSoumission === updated.idSoumission ? updated : s)));
+    syncPushToGoogleSheets({ type: 'en_attente', action: 'update', item: updated });
   };
 
   const handleAddSoumission = (newSoumission: SoumissionEnAttente) => {
@@ -447,8 +469,12 @@ export default function App() {
     }
   };
 
-  const handleAddBordereau = (bl: Bordereau) => {
+  const handleAddBordereau = async (bl: Bordereau) => {
     setBordereaux((prev) => [bl, ...prev]);
+    const res = await syncPushToGoogleSheets({ type: 'bordereaux', action: 'insert', item: bl });
+    if (res.success) {
+      handleTriggerSync();
+    }
   };
 
   // Reset all local cache and restore initial seed data in React state
@@ -550,9 +576,10 @@ export default function App() {
             onAddSoumission={handleAddSoumission}
             onApproveSoumission={handleApproveSoumission}
             onRejectSoumission={handleRejectSoumission}
+            onUpdateSoumission={handleUpdateSoumission}
             onRefreshSoumissions={handleRefreshSoumissions}
             role={currentRole}
-            onClose={() => setActiveTab('dashboard')}
+            onClose={() => setActiveTab(currentRole === 'utilisateur' ? 'calendrier' : 'dashboard')}
           />
         )}
 
@@ -594,6 +621,20 @@ export default function App() {
             onUpdateCommande={handleUpdateCommandePoussin}
             onDeleteCommande={handleDeleteCommandePoussin}
             onAddClient={handleAddClient}
+            onNavigateToLivraisons={() => setActiveTab('livraisons')}
+            onClose={() => setActiveTab('dashboard')}
+          />
+        )}
+
+        {activeTab === 'livraisons' && (
+          <LivraisonsPoussinsModule
+            commandes={commandesPoussins}
+            oacList={oacList}
+            clients={clients}
+            bordereaux={bordereaux}
+            userRole={currentRole}
+            onUpdateCommande={handleUpdateCommandePoussin}
+            onAddBordereau={handleAddBordereau}
             onClose={() => setActiveTab('dashboard')}
           />
         )}

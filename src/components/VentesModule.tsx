@@ -376,9 +376,12 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
     let av = 0;
     let rel = 0;
     filteredVentes.forEach((r) => {
-      mt += r.montant || 0;
-      av += r.avance || 0;
-      rel += r.reliquat || 0;
+      const rowMt = r.montant > 0 ? r.montant : ((Number(r.quantite) || 0) * (Number(r.prixUnitaire) || 0));
+      const rowAv = r.avance > 0 ? r.avance : (r.statutPaiement === 'Payee' ? rowMt : 0);
+      const rowRel = (r.reliquat !== undefined && r.reliquat !== null) ? r.reliquat : (r.statutPaiement === 'Payee' ? 0 : Math.max(0, rowMt - rowAv));
+      mt += rowMt;
+      av += rowAv;
+      rel += rowRel;
     });
     return { totalMt: mt, totalAv: av, totalRel: rel };
   }, [filteredVentes]);
@@ -969,17 +972,17 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
                       {v.quantite?.toLocaleString('fr-FR')}
                     </td>
                     <td className="px-3 py-2.5 text-right font-black text-[#D4AC0D] whitespace-nowrap">
-                      {v.montant?.toLocaleString('fr-FR')}
+                      {(v.montant > 0 ? v.montant : (Number(v.quantite || 0) * Number(v.prixUnitaire || 0)))?.toLocaleString('fr-FR')}
                     </td>
                     <td className="px-3 py-2.5 text-right font-bold text-slate-700 whitespace-nowrap">
-                      {v.avance?.toLocaleString('fr-FR')}
+                      {(v.avance > 0 ? v.avance : (v.statutPaiement === 'Payee' ? (v.montant > 0 ? v.montant : Number(v.quantite || 0) * Number(v.prixUnitaire || 0)) : 0))?.toLocaleString('fr-FR')}
                     </td>
                     <td
                       className={`px-3 py-2.5 text-right font-bold whitespace-nowrap ${
-                        v.reliquat > 0 ? 'text-[#c0392b]' : 'text-[#1e8449]'
+                        (v.reliquat !== undefined && v.reliquat > 0) ? 'text-[#c0392b]' : 'text-[#1e8449]'
                       }`}
                     >
-                      {v.reliquat?.toLocaleString('fr-FR')}
+                      {(v.reliquat !== undefined && v.reliquat !== null ? v.reliquat : (v.statutPaiement === 'Payee' ? 0 : Math.max(0, (v.montant || 0) - (v.avance || 0))))?.toLocaleString('fr-FR')}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap font-bold text-xs">
                       <span

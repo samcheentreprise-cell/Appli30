@@ -12,7 +12,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
   onNavigate,
   onClose,
 }) => {
-  const [filter, setFilter] = useState<'tous' | 'incubation' | 'mirage' | 'eclos'>('tous');
+  const [filter, setFilter] = useState<'tous' | 'Incubation' | 'Miré' | 'En éclosion' | 'Éclos'>('tous');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Helper to parse French date DD/MM/YYYY into Date
@@ -92,26 +92,45 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
         joursAvantEclosion = diffEclo;
       }
 
-      // Operational Status
-      let statut = 'Incubation';
-      let statutBadge = 'bg-blue-100 text-blue-800 border-blue-200';
+      // ══════════════════════════════════════════════════════════════════════════
+      // Operational Status : Incubation | Miré | En éclosion | Éclos
+      // Règle formelle : Éclos si et seulement si les données de l'éclosion sont enregistrées
+      // ══════════════════════════════════════════════════════════════════════════
+      const hasDonneesEclosion = Boolean(
+        (lot.commerciaux !== undefined && lot.commerciaux !== null && Number(lot.commerciaux) > 0) ||
+        (lot.nes !== undefined && lot.nes !== null && Number(lot.nes) > 0) ||
+        (lot.pourVente !== undefined && lot.pourVente !== null && Number(lot.pourVente) > 0) ||
+        (lot.complet === true && (lot.commerciaux != null || lot.nes != null))
+      );
+
+      const hasDonneesMirage = Boolean(
+        (lot.clairs !== undefined && lot.clairs !== null) ||
+        (lot.fertiles !== undefined && lot.fertiles !== null)
+      );
+
+      let statut: 'Incubation' | 'Miré' | 'En éclosion' | 'Éclos' = 'Incubation';
+      let statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
       let isAlerteMirage = false;
       let isAlerteEclosion = false;
 
-      if (lot.complet || lot.commerciaux != null || joursElapsed >= 22) {
-        statut = 'Éclos / Terminé';
-        statutBadge = 'bg-slate-100 text-slate-700 border-slate-300';
-      } else if (joursElapsed >= 21) {
-        statut = 'Éclosion en cours (J21)';
-        statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 animate-pulse';
+      if (hasDonneesEclosion) {
+        // 1. ÉCLOS (si les données de l'éclosion sont enregistrées)
+        statut = 'Éclos';
+        statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-extrabold';
+      } else if (joursElapsed >= 21 || (joursAvantEclosion !== null && joursAvantEclosion <= 0)) {
+        // 2. EN ÉCLOSION (échéance d'éclosion atteinte mais résultats non encore enregistrés)
+        statut = 'En éclosion';
+        statutBadge = 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse';
         isAlerteEclosion = true;
-      } else if (joursElapsed >= 18 && joursElapsed < 21) {
-        statut = `Mirage & Transfert (J${joursElapsed}/21)`;
-        statutBadge = 'bg-amber-100 text-amber-800 border-amber-300';
+      } else if (hasDonneesMirage || (joursElapsed >= 18 && joursElapsed < 21) || (joursAvantMirage !== null && joursAvantMirage <= 0)) {
+        // 3. MIRÉ (mirage réalisé ou échéance J18 atteinte)
+        statut = 'Miré';
+        statutBadge = 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold';
         isAlerteMirage = true;
       } else {
-        statut = `En Incubation (J${joursElapsed}/21)`;
-        statutBadge = 'bg-sky-100 text-sky-800 border-sky-200';
+        // 4. INCUBATION (J0 à J17)
+        statut = 'Incubation';
+        statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
         if (joursAvantMirage === 1 || joursAvantMirage === 0) {
           isAlerteMirage = true;
         }
@@ -137,19 +156,26 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
         isAlerteMirage,
         isAlerteEclosion,
         poussinsAttendus,
+        hasDonneesEclosion,
+        hasDonneesMirage,
       };
     });
   }, [oacList, today]);
 
   // KPIs
   const kpis = useMemo(() => {
-    const actifs = enrichedLots.filter((l) => !l.complet);
+    const actifs = enrichedLots.filter((l) => l.statut !== 'Éclos');
     const totalOeufs = actifs.reduce((acc, l) => acc + (l.recus || l.cartons * 360), 0);
     const totalAttendus = actifs.reduce((acc, l) => acc + l.poussinsAttendus, 0);
 
+    const nbIncubation = enrichedLots.filter((l) => l.statut === 'Incubation').length;
+    const nbMire = enrichedLots.filter((l) => l.statut === 'Miré').length;
+    const nbEnEclosion = enrichedLots.filter((l) => l.statut === 'En éclosion').length;
+    const nbEclos = enrichedLots.filter((l) => l.statut === 'Éclos').length;
+
     // Find next mirage
     const nextMirages = actifs
-      .filter((l) => l.joursAvantMirage !== null && l.joursAvantMirage >= 0)
+      .filter((l) => l.joursAvantMirage !== null && l.joursAvantMirage >= 0 && l.statut === 'Incubation')
       .sort((a, b) => (a.joursAvantMirage ?? 999) - (b.joursAvantMirage ?? 999));
     const prochainMirage = nextMirages[0]
       ? `${nextMirages[0].dateMirageStr} (${nextMirages[0].id})`
@@ -157,7 +183,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
 
     // Find next hatch
     const nextHatches = actifs
-      .filter((l) => l.joursAvantEclosion !== null && l.joursAvantEclosion >= 0)
+      .filter((l) => l.joursAvantEclosion !== null && l.joursAvantEclosion >= 0 && l.statut !== 'Éclos')
       .sort((a, b) => (a.joursAvantEclosion ?? 999) - (b.joursAvantEclosion ?? 999));
     const prochaineEclosion = nextHatches[0]
       ? `${nextHatches[0].dateEcloStr} (${nextHatches[0].id})`
@@ -169,6 +195,10 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
       totalAttendus,
       prochainMirage,
       prochaineEclosion,
+      nbIncubation,
+      nbMire,
+      nbEnEclosion,
+      nbEclos,
     };
   }, [enrichedLots]);
 
@@ -176,9 +206,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
   const filteredLots = useMemo(() => {
     return enrichedLots.filter((lot) => {
       // Tab filter
-      if (filter === 'incubation' && (lot.complet || lot.joursElapsed >= 18)) return false;
-      if (filter === 'mirage' && (lot.joursElapsed < 18 || lot.joursElapsed >= 21 || lot.complet)) return false;
-      if (filter === 'eclos' && !lot.complet && lot.joursElapsed < 21) return false;
+      if (filter !== 'tous' && lot.statut !== filter) return false;
 
       // Search term
       if (searchTerm.trim()) {
@@ -305,7 +333,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
           FILTER TABS & SEARCH
          ══════════════════════════════════════════════════════════════════════════ */}
       <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-        <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+        <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
           <button
             onClick={() => setFilter('tous')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
@@ -317,34 +345,48 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
             Tous ({enrichedLots.length})
           </button>
           <button
-            onClick={() => setFilter('incubation')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              filter === 'incubation'
-                ? 'bg-white text-blue-700 shadow-sm'
+            onClick={() => setFilter('Incubation')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+              filter === 'Incubation'
+                ? 'bg-white text-sky-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            En Incubation (J0-J17)
+            <span>Incubation</span>
+            <span className="text-[10px] px-1.5 py-0.2 bg-sky-100 text-sky-800 rounded-full font-extrabold">{kpis.nbIncubation}</span>
           </button>
           <button
-            onClick={() => setFilter('mirage')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              filter === 'mirage'
+            onClick={() => setFilter('Miré')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+              filter === 'Miré'
                 ? 'bg-white text-amber-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            À Mirer (J18-J20)
+            <span>Miré</span>
+            <span className="text-[10px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded-full font-extrabold">{kpis.nbMire}</span>
           </button>
           <button
-            onClick={() => setFilter('eclos')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              filter === 'eclos'
+            onClick={() => setFilter('En éclosion')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+              filter === 'En éclosion'
+                ? 'bg-white text-purple-700 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>En éclosion</span>
+            <span className="text-[10px] px-1.5 py-0.2 bg-purple-100 text-purple-800 rounded-full font-extrabold">{kpis.nbEnEclosion}</span>
+          </button>
+          <button
+            onClick={() => setFilter('Éclos')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+              filter === 'Éclos'
                 ? 'bg-white text-emerald-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Éclos / Clôturés
+            <span>Éclos</span>
+            <span className="text-[10px] px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded-full font-extrabold">{kpis.nbEclos}</span>
           </button>
         </div>
 
@@ -474,14 +516,33 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
                     {/* STATUT & CYCLE PROGRESS */}
                     <td className="px-4 py-3.5 whitespace-nowrap">
                       <span
-                        className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold border ${lot.statutBadge}`}
+                        className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-black border ${lot.statutBadge}`}
                       >
                         {lot.statut}
                       </span>
-                      <div className="w-28 bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                      <div className="text-[10px] text-slate-500 font-medium mt-1">
+                        {lot.statut === 'Éclos'
+                          ? `✓ Données enregistrées (${(lot.commerciaux ?? lot.nes)?.toLocaleString('fr-FR')} poussins)`
+                          : lot.statut === 'En éclosion'
+                          ? '⏳ Terme J+21 atteint (attente saisie)'
+                          : lot.statut === 'Miré'
+                          ? (lot.clairs !== null && lot.clairs !== undefined ? `Mirage validé (${lot.clairs} clairs)` : `J${lot.joursElapsed}/21 • En transfert`)
+                          : `J${lot.joursElapsed}/21 • En cours`}
+                      </div>
+                      <div className="w-28 bg-slate-100 h-1.5 rounded-full mt-1 overflow-hidden">
                         <div
-                          className="h-full bg-gradient-to-r from-blue-500 via-amber-500 to-emerald-500 rounded-full"
-                          style={{ width: `${progressWidth(progressPct)}%` }}
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            lot.statut === 'Éclos'
+                              ? 'bg-emerald-500'
+                              : lot.statut === 'En éclosion'
+                              ? 'bg-purple-600 animate-pulse'
+                              : lot.statut === 'Miré'
+                              ? 'bg-amber-500'
+                              : 'bg-sky-500'
+                          }`}
+                          style={{
+                            width: lot.statut === 'Éclos' || lot.statut === 'En éclosion' ? '100%' : `${progressWidth(progressPct)}%`,
+                          }}
                         />
                       </div>
                     </td>

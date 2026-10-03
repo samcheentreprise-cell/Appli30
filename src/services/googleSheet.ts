@@ -410,20 +410,40 @@ export async function fetchGoogleSheetsData(retries: number = 1): Promise<SyncRe
 
     // 3. Ventes
     if (ventesRes?.success && Array.isArray(ventesRes?.data?.ventes)) {
-      parsedData.ventes = ventesRes.data.ventes.map((v: any) => ({
-        ligne: v.ligne,
-        date: String(v.date || ''),
-        client: String(v.client || ''),
-        produit: String(v.typeVente || 'Poussins couvoir'),
-        quantite: Number(v.quantite) || 0,
-        prixUnitaire: Number(v.prixUnitaire) || 0,
-        montant: Number(v.montantTotal || v.montantPaye) || 0,
-        typeVente: (v.typeVente || 'Poussins couvoir') as any,
-        statutPaiement: (v.statutPaiement || 'Payee') as any,
-        avance: Number(v.montantPaye) || 0,
-        reliquat: Number(v.reliquat) || 0,
-        observation: v.observation || undefined
-      }));
+      parsedData.ventes = ventesRes.data.ventes.map((v: any) => {
+        const qte = Number(v.quantite) || 0;
+        const pu = Number(v.prixUnitaire ?? v.pu ?? v.prix) || 0;
+        const calcMontant = qte * pu;
+        const mt = (v.montant !== undefined && v.montant !== null && v.montant !== '' && Number(v.montant) > 0)
+          ? Number(v.montant)
+          : (Number(v.montantTotal || v.montantPaye) || calcMontant);
+
+        const av = (v.avance !== undefined && v.avance !== null && v.avance !== '' && Number(v.avance) > 0)
+          ? Number(v.avance)
+          : (Number(v.montantPaye) || (v.statutPaiement === 'Payee' ? mt : 0));
+
+        const rel = (v.reliquat !== undefined && v.reliquat !== null && v.reliquat !== '')
+          ? Number(v.reliquat)
+          : Math.max(0, mt - av);
+
+        const typeV = String(v.typeVente || (v.produit === 'Poulet' ? 'Autre produit' : 'Poussins couvoir'));
+
+        return {
+          ligne: v.ligne,
+          date: formatDateFr(v.date),
+          client: String(v.client || ''),
+          produit: String(v.produit || v.nature || v.typeProduit || (typeV === 'Autre produit' ? 'Poulet' : 'Chairs')),
+          quantite: qte,
+          prixUnitaire: pu,
+          montant: mt,
+          typeVente: typeV as any,
+          statutPaiement: (v.statutPaiement || (rel === 0 ? 'Payee' : av > 0 ? 'Avance' : 'Non payee')) as any,
+          avance: av,
+          reliquat: rel,
+          dateEclosion: formatDateFr(v.dateEclosion || v.eclosion),
+          observation: v.observation || v.remarques || v.obs || undefined
+        };
+      });
     } else {
       parsedData.ventes = [];
     }

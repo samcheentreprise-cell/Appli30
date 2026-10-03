@@ -750,7 +750,7 @@ export const RechercheModule: React.FC<RechercheModuleProps> = ({
                               {fmt(v.prixUnitaire)}
                             </td>
                             <td className="py-2 px-3 text-right font-extrabold text-[#1B4F72] tabular-nums whitespace-nowrap">
-                              {fmt(v.montant)} F
+                              {fmt(v.montant > 0 ? v.montant : (Number(v.quantite || 0) * Number(v.prixUnitaire || 0)))} F
                             </td>
                             <td className="py-2 px-3 text-center whitespace-nowrap">
                               <span
@@ -770,10 +770,10 @@ export const RechercheModule: React.FC<RechercheModuleProps> = ({
                               </span>
                             </td>
                             <td className="py-2 px-3 text-right text-emerald-700 tabular-nums font-semibold">
-                              {fmt(v.avance)}
+                              {fmt(v.avance > 0 ? v.avance : (v.statutPaiement === 'Payee' ? (v.montant > 0 ? v.montant : Number(v.quantite || 0) * Number(v.prixUnitaire || 0)) : 0))}
                             </td>
                             <td className="py-2 px-3 text-right text-rose-700 tabular-nums font-semibold">
-                              {fmt(v.reliquat)}
+                              {fmt(v.reliquat !== undefined && v.reliquat !== null ? v.reliquat : (v.statutPaiement === 'Payee' ? 0 : Math.max(0, (v.montant || 0) - (v.avance || 0))))}
                             </td>
                             <td className="py-2 px-3 whitespace-nowrap">
                               <span

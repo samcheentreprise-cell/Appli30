@@ -106,7 +106,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (parts.length === 3) {
         const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
         if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
-          totalVentesMois += v.montant || 0;
+          const rowMt = v.montant > 0 ? v.montant : ((Number(v.quantite) || 0) * (Number(v.prixUnitaire) || 0));
+          totalVentesMois += rowMt;
         }
       }
     });

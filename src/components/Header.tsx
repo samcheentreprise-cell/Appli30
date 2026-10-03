@@ -25,10 +25,11 @@ export const Header: React.FC<HeaderProps> = ({
 
   // Navigation Items
   const navItems = [
-    { id: 'dashboard', label: 'Tableau de bord', icon: '📊', roles: ['admin', 'comptable', 'utilisateur'] },
+    { id: 'dashboard', label: 'Tableau de bord', icon: '📊', roles: ['admin', 'comptable'] },
     { id: 'calendrier', label: 'Calendrier', icon: '📅', roles: ['utilisateur'] },
+    { id: 'oac', label: 'Gestion des OAC', icon: '🥚', roles: ['admin', 'utilisateur'] },
     { id: 'commandes_poussins', label: 'Cmd Poussins', icon: '🐣', roles: ['admin'] },
-    { id: 'oac', label: 'Suivi des OAC', icon: '🥚', roles: ['admin', 'utilisateur'] },
+    { id: 'livraisons', label: 'Livraisons', icon: '🚚', roles: ['admin', 'utilisateur'] },
     { id: 'ventes', label: 'Ventes', icon: '💰', roles: ['admin', 'comptable'] },
     { id: 'depenses', label: 'Dépenses', icon: '💸', roles: ['admin', 'comptable'] },
     { id: 'factures', label: 'Factures', icon: '📑', roles: ['admin', 'comptable'] },
@@ -43,7 +44,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col sm:flex-row items-center justify-between py-3 gap-3">
           <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
-            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('dashboard')}>
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab(currentRole === 'utilisateur' ? 'calendrier' : 'dashboard')}>
               <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center shadow-inner text-amber-400">
                 <Egg className="w-6 h-6 stroke-[2.2]" />
               </div>

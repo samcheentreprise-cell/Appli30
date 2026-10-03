@@ -37,6 +37,7 @@ export interface SoumissionEnAttente {
 }
 
 export interface CommandePoussin {
+  rowIndex?: number;
   id: string;
   date: string;
   prenom: string;
@@ -51,6 +52,28 @@ export interface CommandePoussin {
   total: number;
   statut: 'En attente' | 'Confirmée' | 'Livrée' | 'Annulée';
   notes?: string;
+  quantiteFournie?: number;
+  statutLivraison?: 'En attente' | 'Livré' | 'Partiel' | 'Non retiré';
+  receptionnaire?: string;
+  heureLivraison?: string;
+  nbCartons?: number;
+  notesLivraison?: string;
+  dateLivraison?: string;
+  signatureClient?: string;
+  dateSignature?: string;
+  isUnlockedByAdmin?: boolean;
+  unlockedByAdminInfo?: string;
+}
+
+export interface LivraisonRecord {
+  idCommande: string;
+  quantiteFournie: number;
+  statutLivraison: 'En attente' | 'Livré' | 'Partiel' | 'Non retiré';
+  receptionnaire?: string;
+  heureLivraison?: string;
+  nbCartons?: number;
+  notesLivraison?: string;
+  dateValidation?: string;
 }
 
 export interface MouvementCaisse {

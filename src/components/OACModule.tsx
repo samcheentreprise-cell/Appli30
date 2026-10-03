@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { OAC, SoumissionEnAttente, UserRole } from '../types';
 import { TYPES_OAC, RACES_OAC, FOURNISSEURS_OAC } from '../data/initialData';
+import { playAlertSound } from '../utils/audio';
 
 interface OACModuleProps {
   oacList: OAC[];
@@ -9,8 +10,9 @@ interface OACModuleProps {
   onUpdateOAC: (oac: OAC) => void;
   onDeleteOAC: (id: string) => void;
   onAddSoumission: (soumission: SoumissionEnAttente) => void;
-  onApproveSoumission: (idSoumission: string, idChoisi: string) => void;
+  onApproveSoumission: (idSoumission: string, idChoisi: string, donneesModifiees?: any) => void;
   onRejectSoumission: (idSoumission: string, raison: string) => void;
+  onUpdateSoumission?: (soumission: SoumissionEnAttente) => void;
   onRefreshSoumissions?: () => void;
   role: UserRole;
   onClose?: () => void;
@@ -25,6 +27,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   onAddSoumission,
   onApproveSoumission,
   onRejectSoumission,
+  onUpdateSoumission,
   onRefreshSoumissions,
   role,
   onClose,
@@ -36,9 +39,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const [soumissionSearch, setSoumissionSearch] = useState('');
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
+  // Active correction mode for operator
+  const [activeCorrection, setActiveCorrection] = useState<SoumissionEnAttente | null>(null);
+
   const pendingCount = soumissions.filter((s) => s.statut === 'En attente').length;
   const approvedCount = soumissions.filter((s) => s.statut === 'Approuvé').length;
   const rejectedCount = soumissions.filter((s) => s.statut === 'Rejeté').length;
+
+  // Sound alert on operator phone when a new rejection arrives
+  const prevRejectedCount = useRef(rejectedCount);
+  useEffect(() => {
+    if (role !== 'admin' && rejectedCount > prevRejectedCount.current) {
+      playAlertSound('rejection');
+    }
+    prevRejectedCount.current = rejectedCount;
+  }, [rejectedCount, role]);
 
   const filteredSoumissions = useMemo(() => {
     return soumissions.filter((s) => {
@@ -248,26 +263,49 @@ export const OACModule: React.FC<OACModuleProps> = ({
 
       // Operator Role: Always send to validation before integration into database
       if (role !== 'admin') {
-        const newSoumission: SoumissionEnAttente = {
-          ligne: soumissions.length + 1,
-          idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
-          type: 'Commande',
-          soumisPar: 'Opérateur',
-          dateSoumission: new Date().toLocaleDateString('fr-FR'),
-          statut: 'En attente',
-          resume: `Commande ${cType} (${cRace}) - ${cartonsNum} cartons (${cFourn})`,
-          donnees: {
-            date: cDt,
-            type: cType,
-            race: cRace,
-            fournisseur: cFourn,
-            cartons: cartonsNum,
-            casses: cassesNum,
-            eclosion: eclosionDate,
-          },
+        const donnees = {
+          date: cDt,
+          type: cType,
+          race: cRace,
+          fournisseur: cFourn,
+          cartons: cartonsNum,
+          casses: cassesNum,
+          eclosion: eclosionDate,
         };
-        onAddSoumission(newSoumission);
-        showNotification('📨 Commande transmise à la validation administrateur avec succès. Elle sera intégrée dès son approbation.', true);
+        const resume = `Commande ${cType} (${cRace}) - ${cartonsNum} cartons (${cFourn})`;
+
+        if (activeCorrection && activeCorrection.type === 'Commande') {
+          const updated: SoumissionEnAttente = {
+            ...activeCorrection,
+            statut: 'En attente',
+            dateSoumission: new Date().toLocaleDateString('fr-FR'),
+            resume,
+            donnees,
+            raison: undefined,
+          };
+          if (onUpdateSoumission) {
+            onUpdateSoumission(updated);
+          } else {
+            onAddSoumission(updated);
+          }
+          setActiveCorrection(null);
+          playAlertSound('success');
+          showNotification('📨 Commande corrigée et re-transmise pour validation administrateur.', true);
+        } else {
+          const newSoumission: SoumissionEnAttente = {
+            ligne: soumissions.length + 1,
+            idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
+            type: 'Commande',
+            soumisPar: 'Opérateur',
+            dateSoumission: new Date().toLocaleDateString('fr-FR'),
+            statut: 'En attente',
+            resume,
+            donnees,
+          };
+          onAddSoumission(newSoumission);
+          playAlertSound('success');
+          showNotification('📨 Commande transmise à la validation administrateur avec succès. Elle sera intégrée dès son approbation.', true);
+        }
         razC();
         return;
       }
@@ -336,22 +374,45 @@ export const OACModule: React.FC<OACModuleProps> = ({
 
         // Operator Role: Send mirage declaration to validation
         if (role !== 'admin') {
-          const newSoumission: SoumissionEnAttente = {
-            ligne: soumissions.length + 1,
-            idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
-            type: 'Mirage',
-            soumisPar: 'Opérateur',
-            dateSoumission: new Date().toLocaleDateString('fr-FR'),
-            statut: 'En attente',
-            resume: `Mirage lot ${mId} : ${clairsNum} clairs, ${fertiles} fertiles`,
-            donnees: {
-              id: mId,
-              clairs: clairsNum,
-              fertiles,
-            },
+          const donnees = {
+            id: mId,
+            clairs: clairsNum,
+            fertiles,
           };
-          onAddSoumission(newSoumission);
-          showNotification('📨 Déclaration de mirage transmise à la validation administrateur.', true);
+          const resume = `Mirage lot ${mId} : ${clairsNum} clairs, ${fertiles} fertiles`;
+
+          if (activeCorrection && activeCorrection.type === 'Mirage') {
+            const updated: SoumissionEnAttente = {
+              ...activeCorrection,
+              statut: 'En attente',
+              dateSoumission: new Date().toLocaleDateString('fr-FR'),
+              resume,
+              donnees,
+              raison: undefined,
+            };
+            if (onUpdateSoumission) {
+              onUpdateSoumission(updated);
+            } else {
+              onAddSoumission(updated);
+            }
+            setActiveCorrection(null);
+            playAlertSound('success');
+            showNotification('📨 Mirage corrigé et re-transmis à la validation administrateur.', true);
+          } else {
+            const newSoumission: SoumissionEnAttente = {
+              ligne: soumissions.length + 1,
+              idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
+              type: 'Mirage',
+              soumisPar: 'Opérateur',
+              dateSoumission: new Date().toLocaleDateString('fr-FR'),
+              statut: 'En attente',
+              resume,
+              donnees,
+            };
+            onAddSoumission(newSoumission);
+            playAlertSound('success');
+            showNotification('📨 Déclaration de mirage transmise à la validation administrateur.', true);
+          }
           razM();
           return;
         }
@@ -393,25 +454,48 @@ export const OACModule: React.FC<OACModuleProps> = ({
 
         // Operator Role: Send eclosion declaration to validation
         if (role !== 'admin') {
-          const newSoumission: SoumissionEnAttente = {
-            ligne: soumissions.length + 1,
-            idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
-            type: 'Éclosion',
-            soumisPar: 'Opérateur',
-            dateSoumission: new Date().toLocaleDateString('fr-FR'),
-            statut: 'En attente',
-            resume: `Éclosion lot ${eId} : ${commNum} commerciaux, ${hanNum} handicapés, ${morNum} morts`,
-            donnees: {
-              id: eId,
-              commerciaux: commNum,
-              nes: commNum,
-              handicapes: hanNum,
-              morts: morNum,
-              pourVente,
-            },
+          const donnees = {
+            id: eId,
+            commerciaux: commNum,
+            nes: commNum,
+            handicapes: hanNum,
+            morts: morNum,
+            pourVente,
           };
-          onAddSoumission(newSoumission);
-          showNotification('📨 Déclaration d\'éclosion transmise à la validation administrateur.', true);
+          const resume = `Éclosion lot ${eId} : ${commNum} commerciaux, ${hanNum} handicapés, ${morNum} morts`;
+
+          if (activeCorrection && activeCorrection.type === 'Éclosion') {
+            const updated: SoumissionEnAttente = {
+              ...activeCorrection,
+              statut: 'En attente',
+              dateSoumission: new Date().toLocaleDateString('fr-FR'),
+              resume,
+              donnees,
+              raison: undefined,
+            };
+            if (onUpdateSoumission) {
+              onUpdateSoumission(updated);
+            } else {
+              onAddSoumission(updated);
+            }
+            setActiveCorrection(null);
+            playAlertSound('success');
+            showNotification('📨 Éclosion corrigée et re-transmise à la validation administrateur.', true);
+          } else {
+            const newSoumission: SoumissionEnAttente = {
+              ligne: soumissions.length + 1,
+              idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
+              type: 'Éclosion',
+              soumisPar: 'Opérateur',
+              dateSoumission: new Date().toLocaleDateString('fr-FR'),
+              statut: 'En attente',
+              resume,
+              donnees,
+            };
+            onAddSoumission(newSoumission);
+            playAlertSound('success');
+            showNotification('📨 Déclaration d\'éclosion transmise à la validation administrateur.', true);
+          }
           razE();
           return;
         }
@@ -484,26 +568,38 @@ export const OACModule: React.FC<OACModuleProps> = ({
   };
 
   // -------------------------------------------------------------
-  // Admin Approval Workflow
+  // Admin Approval Workflow & Operator Correction
   // -------------------------------------------------------------
+  const [editDonnees, setEditDonnees] = useState<any>({});
+
   const handleOpenApprove = (soumission: SoumissionEnAttente) => {
     setSelectedSoumission(soumission);
-    setApproveIdChoisi(`OAC-2609-00${oacList.length + 1}`);
+    const initialData = JSON.parse(JSON.stringify(soumission.donnees || {}));
+    setEditDonnees(initialData);
+    setApproveIdChoisi(soumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`);
     setApproveIdError(false);
     setApproveModalOpen(true);
   };
 
   const confirmApprove = () => {
-    if (!approveIdChoisi.trim()) {
+    if (!selectedSoumission) return;
+    if (selectedSoumission.type === 'Commande' && !approveIdChoisi.trim()) {
       setApproveIdError(true);
       return;
     }
-    if (selectedSoumission) {
-      onApproveSoumission(selectedSoumission.idSoumission, approveIdChoisi.trim());
-      showNotification('Soumission approuvée avec succès.', true);
-      setApproveModalOpen(false);
-      setSelectedSoumission(null);
-    }
+    onApproveSoumission(selectedSoumission.idSoumission, approveIdChoisi.trim(), editDonnees);
+    playAlertSound('success');
+    showNotification(`Soumission ${selectedSoumission.type} approuvée et intégrée avec succès !`, true);
+    setApproveModalOpen(false);
+    setSelectedSoumission(null);
+  };
+
+  const handleRejectFromApprove = () => {
+    if (!selectedSoumission) return;
+    setRejectSoumissionId(selectedSoumission.idSoumission);
+    setRejectRaison('');
+    setApproveModalOpen(false);
+    setRejectModalOpen(true);
   };
 
   const handleOpenReject = (soumission: SoumissionEnAttente) => {
@@ -514,11 +610,55 @@ export const OACModule: React.FC<OACModuleProps> = ({
 
   const confirmReject = () => {
     if (rejectSoumissionId) {
-      onRejectSoumission(rejectSoumissionId, rejectRaison);
-      showNotification('Soumission rejetée.', true);
+      onRejectSoumission(rejectSoumissionId, rejectRaison.trim() || 'Correction demandée par le superviseur');
+      playAlertSound('rejection');
+      showNotification("Soumission rejetée. Une alerte sonore et une demande de correction ont été transmises à l'opérateur.", true);
       setRejectModalOpen(false);
       setRejectSoumissionId('');
     }
+  };
+
+  // Operator: Start correction flow for rejected submission
+  const handleStartCorrection = (s: SoumissionEnAttente) => {
+    setActiveCorrection(s);
+    setMainTab('cycle');
+    playAlertSound('warning');
+    if (s.type === 'Commande') {
+      setTabActif(0);
+      if (s.donnees) {
+        setCDt(s.donnees.date || '');
+        setCType(s.donnees.type || 'Chairs');
+        setCRace(s.donnees.race || 'Ross 308');
+        setCFourn(s.donnees.fournisseur || 'Pak tavuk');
+        setCCar(s.donnees.cartons != null ? String(s.donnees.cartons) : '');
+        setCCas(s.donnees.casses != null ? String(s.donnees.casses) : '');
+      }
+    } else if (s.type === 'Mirage') {
+      setTabActif(1);
+      if (s.donnees?.id) {
+        const item = oacList.find((x) => x.id === s.donnees.id);
+        if (item) {
+          loadM(item);
+        } else {
+          setMId(s.donnees.id);
+        }
+        setMCla(s.donnees.clairs != null ? String(s.donnees.clairs) : '');
+      }
+    } else if (s.type === 'Éclosion') {
+      setTabActif(2);
+      if (s.donnees?.id) {
+        const item = oacList.find((x) => x.id === s.donnees.id);
+        if (item) {
+          loadE(item);
+        } else {
+          setEId(s.donnees.id);
+        }
+        setENes(s.donnees.commerciaux != null ? String(s.donnees.commerciaux) : '');
+        setEHan(s.donnees.handicapes != null ? String(s.donnees.handicapes) : '');
+        setEMor(s.donnees.morts != null ? String(s.donnees.morts) : '');
+      }
+    }
+    showNotification(`Correction activée : ${s.resume}. Motif du rejet : « ${s.raison || 'Non précisé'} ». Modifiez les valeurs et cliquez sur Transmettre.`, true);
   };
 
   const isSelected = tabActif === 0 ? Boolean(selC) : tabActif === 1 ? Boolean(selM) : Boolean(selE);
@@ -527,7 +667,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
     <div className="bg-slate-200/60 rounded-3xl p-3 sm:p-5 shadow-2xl border border-slate-300 max-w-5xl mx-auto space-y-4">
       {/* Top Modal Window Bar */}
       <div className="flex items-center justify-between bg-white px-5 py-3 rounded-2xl border border-slate-200 shadow-sm">
-        <h1 className="text-xl font-bold text-slate-800 tracking-tight">Gestion OAC</h1>
+        <h1 className="text-xl font-bold text-slate-800 tracking-tight">Gestion des OAC</h1>
         {onClose && (
           <button
             onClick={onClose}

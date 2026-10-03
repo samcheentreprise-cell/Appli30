@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { CommandePoussin, Client, OAC } from '../types';
 
 interface CommandesPoussinsModuleProps {
@@ -9,6 +9,7 @@ interface CommandesPoussinsModuleProps {
   onUpdateCommande?: (cmd: CommandePoussin) => void;
   onDeleteCommande?: (id: string) => void;
   onAddClient?: (client: Client) => void;
+  onNavigateToLivraisons?: () => void;
   onClose?: () => void;
 }
 
@@ -59,6 +60,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   onUpdateCommande,
   onDeleteCommande,
   onAddClient,
+  onNavigateToLivraisons,
   onClose,
 }) => {
   // Navigation View: 'accueil' | 'dashboard' | 'nouvelle' | 'chercher'
@@ -135,11 +137,14 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     const datesMap: Record<
       string,
       {
+        id: string;
         date: string;
         dateFormatee: string;
         dateObj: Date | null;
         type: string;
-        typesList: Array<{ type: string; race: string; lotId: string; cartons: number; attendus: number; prix: number }>;
+        race: string;
+        lotId?: string;
+        fournisseur?: string;
         prix: number;
         prevision: number;
         commande: number;
@@ -151,89 +156,102 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     const todayTime = new Date();
     todayTime.setHours(0, 0, 0, 0);
 
-    // 1. Build from real OAC batches in the Sheet
+    // 1. Build from real OAC batches in the Sheet (each batch/race has its own planned hatching)
     oacList.forEach((oac) => {
       if (!oac.eclosion) return;
-      const key = oac.eclosion.trim();
-      const prevQty = oac.attendus || (oac.fertiles ? Math.round(oac.fertiles * 0.8) : Math.round((oac.recus || oac.cartons * 360) * 0.75));
-      const type = oac.type || oac.race || 'Chairs';
+      const dateKey = oac.eclosion.trim();
+      const prevQty = oac.attendus || (oac.fertiles ? Math.round(oac.fertiles * 0.8) : Math.round((oac.recus || (oac.cartons || 0) * 360) * 0.75));
+      const type = (oac.type || oac.race || 'Chairs').trim();
+      const race = (oac.race || '').trim();
       const prix = getPriceForType(type);
-      const dObj = parseFrDate(key);
-      const isPast = dObj ? dObj.getTime() < todayTime.getTime() && oac.complet : false;
+      const dObj = parseFrDate(dateKey);
+      const isPast = dObj ? dObj.getTime() < todayTime.getTime() && Boolean(oac.complet) : false;
+
+      const dateFormatee = dObj
+        ? dObj.toLocaleDateString('fr-FR', {
+            weekday: 'short',
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+          })
+        : dateKey;
+
+      // Unique key per batch so each distinct hatching/race on the same date is kept separate
+      const key = oac.id
+        ? `${dateKey}___${oac.id}`
+        : `${dateKey}___${type.toLowerCase()}${race && race.toLowerCase() !== type.toLowerCase() ? `___${race.toLowerCase()}` : ''}`;
 
       if (!datesMap[key]) {
         datesMap[key] = {
-          date: key,
-          dateFormatee: key,
+          id: key,
+          date: dateKey,
+          dateFormatee,
           dateObj: dObj,
           type,
-          typesList: [],
+          race: race && race.toLowerCase() !== type.toLowerCase() ? race : '',
+          lotId: oac.id || '',
+          fournisseur: oac.fournisseur || '',
           prix,
           prevision: 0,
           commande: 0,
           lots: [],
-          isPast,
+          isPast: Boolean(isPast),
         };
       }
 
       datesMap[key].prevision += prevQty;
       datesMap[key].lots.push(oac);
-
-      const existing = datesMap[key].typesList.find((t) => t.type.toLowerCase() === type.toLowerCase());
-      if (existing) {
-        existing.attendus += prevQty;
-        existing.cartons += oac.cartons || 0;
-      } else {
-        datesMap[key].typesList.push({
-          type,
-          race: oac.race || '',
-          lotId: oac.id,
-          cartons: oac.cartons || 0,
-          attendus: prevQty,
-          prix,
-        });
-      }
-
-      // Format combined type label
-      const allTypes = datesMap[key].typesList.map((t) => t.type);
-      datesMap[key].type = allTypes.join(' & ');
     });
 
     // 2. Aggregate orders from sheet
     commandes.forEach((cmd) => {
       if (cmd.statut === 'Annulée') return;
-      const key = cmd.dateEclosion?.trim();
-      if (!key) return;
+      const cmdDate = cmd.dateEclosion?.trim();
+      if (!cmdDate) return;
 
-      if (datesMap[key]) {
-        datesMap[key].commande += cmd.quantite;
+      const cmdType = (cmd.typeProduit || 'Chairs').trim().toLowerCase();
+
+      // Find matching hatching for this date and type
+      const matching = Object.values(datesMap).find(
+        (item) => item.date === cmdDate && (item.type.toLowerCase() === cmdType || (item.race && item.race.toLowerCase() === cmdType))
+      );
+
+      if (matching) {
+        matching.commande += Number(cmd.quantite) || 0;
       } else {
-        const dObj = parseFrDate(key);
+        const dObj = parseFrDate(cmdDate);
         const isPast = dObj ? dObj.getTime() < todayTime.getTime() : false;
-        const cmdType = cmd.typeProduit || 'Chairs';
-        const cmdPrix = cmd.prixUnitaire || getPriceForType(cmdType);
+        const rawType = cmd.typeProduit || 'Chairs';
+        const cmdPrix = cmd.prixUnitaire || getPriceForType(rawType);
+        const dateFormatee = dObj
+          ? dObj.toLocaleDateString('fr-FR', {
+              weekday: 'short',
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+            })
+          : cmdDate;
 
-        datesMap[key] = {
-          date: key,
-          dateFormatee: key,
-          dateObj: dObj,
-          type: cmdType,
-          typesList: [
-            {
-              type: cmdType,
-              race: '',
-              lotId: '',
-              cartons: 0,
-              attendus: 0,
-              prix: cmdPrix,
-            },
-          ],
-          prix: cmdPrix,
-          prevision: 0,
-          commande: cmd.quantite,
-          lots: [],
-          isPast,
-        };
+        const key = `${cmdDate}___${rawType.toLowerCase()}`;
+        if (!datesMap[key]) {
+          datesMap[key] = {
+            id: key,
+            date: cmdDate,
+            dateFormatee,
+            dateObj: dObj,
+            type: rawType,
+            race: '',
+            lotId: '',
+            fournisseur: '',
+            prix: cmdPrix,
+            prevision: 0,
+            commande: Number(cmd.quantite) || 0,
+            lots: [],
+            isPast: Boolean(isPast),
+          };
+        } else {
+          datesMap[key].commande += Number(cmd.quantite) || 0;
+        }
       }
     });
 
@@ -241,9 +259,9 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     const sorted = Object.values(datesMap).sort((a, b) => {
       const ta = a.dateObj ? a.dateObj.getTime() : 0;
       const tb = b.dateObj ? b.dateObj.getTime() : 0;
-      // Future dates first
       if (a.isPast !== b.isPast) return a.isPast ? 1 : -1;
-      return ta - tb;
+      if (ta !== tb) return ta - tb;
+      return a.type.localeCompare(b.type);
     });
 
     return sorted;
@@ -255,44 +273,32 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     return list.length > 0 ? list : hatchDatesData;
   }, [hatchDatesData]);
 
-  // Synchronize selDateKey with available active hatch dates
+  // Synchronize selDateKey & selType with available active hatch dates
   useEffect(() => {
     if (activeHatchDates.length > 0) {
-      if (!selDateKey || !activeHatchDates.some((d) => d.date === selDateKey)) {
+      const match = activeHatchDates.find(
+        (d) => d.date === selDateKey && d.type.toLowerCase() === selType.toLowerCase()
+      );
+      if (!match) {
         setSelDateKey(activeHatchDates[0].date);
+        setSelType(activeHatchDates[0].type);
       }
     }
-  }, [activeHatchDates, selDateKey]);
+  }, [activeHatchDates, selDateKey, selType]);
 
   // Current selected hatch date info
   const selectedHatchDate = useMemo(() => {
     return (
+      activeHatchDates.find(
+        (d) => d.date === selDateKey && d.type.toLowerCase() === selType.toLowerCase()
+      ) ||
       activeHatchDates.find((d) => d.date === selDateKey) ||
-      hatchDatesData.find((d) => d.date === selDateKey) ||
       activeHatchDates[0]
     );
-  }, [activeHatchDates, hatchDatesData, selDateKey]);
+  }, [activeHatchDates, selDateKey, selType]);
 
-  // Synchronize selType with the selected hatch date
-  useEffect(() => {
-    if (selectedHatchDate && selectedHatchDate.typesList.length > 0) {
-      if (!selType || !selectedHatchDate.typesList.some((t) => t.type.toLowerCase() === selType.toLowerCase())) {
-        setSelType(selectedHatchDate.typesList[0].type);
-      }
-    }
-  }, [selectedHatchDate, selType]);
-
-  const currentTypeInfo = useMemo(() => {
-    if (!selectedHatchDate) return null;
-    return (
-      selectedHatchDate.typesList.find((t) => t.type.toLowerCase() === selType.toLowerCase()) ||
-      selectedHatchDate.typesList[0] ||
-      null
-    );
-  }, [selectedHatchDate, selType]);
-
-  const prixUnitaire = currentTypeInfo ? currentTypeInfo.prix : getPriceForType(selType || 'Chairs');
-  const typeProduit = selType || currentTypeInfo?.type || 'Chairs';
+  const prixUnitaire = selectedHatchDate ? selectedHatchDate.prix : getPriceForType(selType || 'Chairs');
+  const typeProduit = selectedHatchDate?.type || selType || 'Chairs';
   const montantTotal = quantite * prixUnitaire;
 
   // Overall KPI across active dates
@@ -430,10 +436,17 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       waGest: waGestLink,
     });
 
-    // Reset Form
-    setQuantite(1);
+    // Reset Form completely
+    setQuantite(100);
     setNotes('');
     setSelClient(null);
+    setClientSearch('');
+    setShowNewClientForm(false);
+    setNcPrenom('');
+    setNcNom('');
+    setNcVille('');
+    setNcTel('');
+    setNcEmail('');
   };
 
   // Open Edit Modal
@@ -538,6 +551,16 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             <span>🔍</span>
             <span>Chercher</span>
           </button>
+          {onNavigateToLivraisons && (
+            <button
+              onClick={onNavigateToLivraisons}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 bg-white/10 text-white hover:bg-white/20 border border-white/15"
+              title="Passer au module de livraison et contrôle des sorties"
+            >
+              <span>🚚</span>
+              <span>Livraisons</span>
+            </button>
+          )}
         </div>
 
         {/* Right buttons */}
@@ -588,8 +611,8 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             </p>
           </div>
 
-          {/* 3 Modules Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          {/* 4 Modules Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Card 1: Tableau de Bord */}
             <div
               onClick={() => setView('dashboard')}
@@ -632,6 +655,25 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
               <h2 className="text-xl font-bold mb-2">Chercher / Modifier</h2>
               <p className="text-xs text-amber-100 leading-relaxed opacity-90">
                 Recherchez et modifiez vos commandes existantes
+              </p>
+            </div>
+
+            {/* Card 4: Livraisons & Sorties */}
+            <div
+              onClick={() => {
+                if (onNavigateToLivraisons) {
+                  onNavigateToLivraisons();
+                }
+              }}
+              className="rounded-2xl p-6 text-center cursor-pointer transition transform hover:-translate-y-2 hover:shadow-2xl shadow-xl flex flex-col items-center justify-between"
+              style={{
+                background: 'linear-gradient(135deg, #0284c7, #0369a1)',
+              }}
+            >
+              <div className="text-5xl mb-3">🚚</div>
+              <h2 className="text-xl font-bold mb-2">Livraisons Poussins</h2>
+              <p className="text-xs text-sky-100 leading-relaxed opacity-90">
+                Pointage des poussins réellement fournis par éclosion
               </p>
             </div>
           </div>
@@ -733,125 +775,88 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {activeHatchDates.map((d) => {
                 const dispo = Math.max(0, d.prevision - d.commande);
                 const taux = d.prevision > 0 ? Math.round((d.commande / d.prevision) * 100) : 0;
                 const progressWidth = Math.min(100, Math.max(0, taux));
+                const isComplet = dispo === 0 && d.prevision > 0;
 
                 return (
                   <div
-                    key={d.date}
-                    className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200/80 transition hover:shadow-md hover:-translate-y-1 flex flex-col justify-between"
+                    key={d.id}
+                    onClick={() => {
+                      setSelDateKey(d.date);
+                      setSelType(d.type);
+                      setView('nouvelle');
+                    }}
+                    className="bg-white rounded-2xl overflow-hidden shadow-xs hover:shadow-md transition cursor-pointer flex flex-col justify-between border border-slate-200/80"
                     style={{ borderLeft: '5px solid #10b981' }}
                   >
                     {/* Header */}
-                    <div className="bg-[#f8f9fa] px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                    <div className="bg-[#f8f9fa] px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
                       <div>
-                        <span className="font-extrabold text-base text-[#1e293b] tracking-wide">{d.dateFormatee}</span>
-                        <span className="block text-[11px] text-slate-500 font-medium">{d.type}</span>
+                        <div className="font-bold text-slate-800 text-sm sm:text-base tracking-tight">
+                          {d.dateFormatee}
+                        </div>
+                        <div className="text-xs font-bold text-[#1a5276] uppercase tracking-wide mt-0.5 flex items-center gap-1.5">
+                          <span>{d.type}</span>
+                          {d.race && d.race.toLowerCase() !== d.type.toLowerCase() && (
+                            <span className="text-slate-500 font-normal">({d.race})</span>
+                          )}
+                          {d.lotId && (
+                            <span className="text-[10px] text-slate-400 font-medium font-mono">
+                              • {d.lotId}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex gap-2">
-                        {(() => {
-                           const today = new Date();
-                           today.setHours(0, 0, 0, 0);
-                           if (d.dateObj) {
-                             const diffDays = Math.ceil((d.dateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                             if (diffDays <= 3 && diffDays >= 0) {
-                               return (
-                                 <span className="bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full text-[10px] font-bold text-amber-800 flex items-center gap-1">
-                                   ⚠️ J-{diffDays}
-                                 </span>
-                               );
-                             }
-                           }
-                           return null;
-                        })()}
-                        <span className="bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full text-xs font-bold text-emerald-700 flex items-center gap-1">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                          <span>Ouvert</span>
-                        </span>
+                      <div className="bg-white border border-slate-200/90 px-3 py-1 rounded-full text-xs font-semibold text-slate-700 flex items-center gap-1.5 shadow-2xs">
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full ${
+                            isComplet ? 'bg-red-500' : 'bg-[#10b981]'
+                          }`}
+                        />
+                        <span>{isComplet ? 'Complet' : 'Ouvert'}</span>
                       </div>
                     </div>
 
                     {/* Body */}
-                    <div className="p-4 space-y-3 text-xs flex-1">
-                      {/* Lots OAC in incubation breakdown */}
-                      <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-1.5">
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-                          <span>Lots en incubation (OAC) :</span>
-                          <span className="text-emerald-700 font-extrabold">{d.typesList.length} souche(s)</span>
-                        </div>
-                        {d.typesList.length > 0 ? (
-                          d.typesList.map((t, idx) => (
-                            <div key={idx} className="flex justify-between items-center text-[11px]">
-                              <span className="font-semibold text-slate-800">
-                                • {t.type} {t.race ? `(${t.race})` : ''} - {t.lotId}
-                              </span>
-                              <span className="font-bold text-slate-700 tabular-nums">
-                                {t.attendus.toLocaleString('fr-FR')} poussins
-                              </span>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-[11px] text-slate-500 italic">Lots couvoir standard</div>
-                        )}
-                      </div>
-
-                      <div className="flex justify-between text-slate-600">
-                        <span className="font-medium">Prévision Totale</span>
-                        <span className="font-black text-slate-900 text-sm tabular-nums">
-                          {d.prevision.toLocaleString('fr-FR')} poussins
+                    <div className="p-5 space-y-4">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-500 font-semibold">Prévision</span>
+                        <span className="font-extrabold text-slate-900 text-base sm:text-lg tabular-nums">
+                          {d.prevision.toLocaleString('fr-FR')}
                         </span>
                       </div>
-                      <div className="flex justify-between text-slate-600">
-                        <span className="font-medium">Commandé (Réservé)</span>
-                        <span className="font-bold text-[#5b7c99] text-sm tabular-nums">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-500 font-semibold">Commandé</span>
+                        <span className="font-bold text-[#334155] text-base sm:text-lg tabular-nums">
                           {d.commande.toLocaleString('fr-FR')}
                         </span>
                       </div>
-                      <div className="flex justify-between text-slate-600">
-                        <span className="font-medium">Disponible Restant</span>
-                        <span className="font-black text-[#10b981] text-sm tabular-nums">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-500 font-semibold">Disponible</span>
+                        <span className="font-bold text-[#10b981] text-base sm:text-lg tabular-nums">
                           {dispo.toLocaleString('fr-FR')}
                         </span>
                       </div>
 
-                      {/* Progress Bar */}
-                      <div className="w-full bg-slate-100 rounded-full h-2 mt-2 overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{
-                            width: `${progressWidth}%`,
-                            background:
-                              progressWidth >= 90
-                                ? '#ef4444'
-                                : progressWidth >= 50
-                                ? '#f97316'
-                                : '#10b981',
-                          }}
-                        />
+                      {/* Progress Bar & percentage */}
+                      <div className="pt-2">
+                        <div className="w-full bg-[#f1f5f9] rounded-full h-2.5 overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{
+                              width: `${progressWidth}%`,
+                              background: 'linear-gradient(90deg, #10b981 0%, #f59e0b 60%, #ef4444 100%)',
+                            }}
+                          />
+                        </div>
+                        <div className="text-center text-xs font-semibold text-slate-500 mt-2">
+                          {taux}% rempli
+                        </div>
                       </div>
-                      <div className="text-right text-[11px] font-bold text-slate-400">
-                        {taux}% réservé
-                      </div>
-                    </div>
-
-                    {/* Quick booking button */}
-                    <div className="p-3 bg-slate-50 border-t border-slate-100">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelDateKey(d.date);
-                          if (d.typesList.length > 0) {
-                            setSelType(d.typesList[0].type);
-                          }
-                          setView('nouvelle');
-                        }}
-                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-xs"
-                      >
-                        <span>➕ Réserver pour le {d.date}</span>
-                      </button>
                     </div>
                   </div>
                 );
@@ -903,14 +908,17 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {hatchDatesData.map((d, idx) => {
-                  const isSelected = selDateKey === d.date;
+                  const isSelected = selDateKey === d.date && selType.toLowerCase() === d.type.toLowerCase();
                   const dispo = Math.max(0, d.prevision - d.commande);
                   const palette = HATCH_COLOR_PALETTES[idx % HATCH_COLOR_PALETTES.length];
 
                   return (
                     <div
-                      key={d.date}
-                      onClick={() => setSelDateKey(d.date)}
+                      key={d.id}
+                      onClick={() => {
+                        setSelDateKey(d.date);
+                        setSelType(d.type);
+                      }}
                       className={`p-3.5 rounded-xl cursor-pointer transition text-white shadow-md relative overflow-hidden select-none ${
                         isSelected
                           ? 'ring-4 ring-offset-2 ring-sky-300 scale-[1.03] shadow-lg'
@@ -926,12 +934,12 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                           <span className="w-2.5 h-2.5 rounded-full bg-white shadow-xs" title="Sélectionné" />
                         )}
                       </div>
-                      <div className="text-xs font-semibold text-white/95 mt-0.5">
-                        {dispo.toLocaleString('fr-FR')} place(s)
+                      <div className="text-xs font-bold text-white mt-1 uppercase tracking-wide">
+                        {d.type} {d.race && d.race.toLowerCase() !== d.type.toLowerCase() ? `(${d.race})` : ''}
                       </div>
-                      <div className="text-[11px] font-medium text-white/85 mt-1 flex items-center justify-between">
-                        <span>{d.type}</span>
-                        {dispo <= 50 && (
+                      <div className="text-[11px] font-medium text-white/90 mt-1 flex items-center justify-between">
+                        <span>{dispo.toLocaleString('fr-FR')} place(s)</span>
+                        {dispo <= 50 && dispo > 0 && (
                           <span className="text-[9px] bg-black/25 text-white px-1.5 py-0.5 rounded font-bold uppercase">
                             Presque plein
                           </span>

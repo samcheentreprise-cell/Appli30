@@ -66,6 +66,27 @@ export function getStoredData<T>(key: string, defaultVal: T): T {
           localStorage.removeItem(`samche_${key}`);
           return defaultVal;
         }
+
+        if (key === 'ventes') {
+          return parsed.map((v: any) => {
+            const qte = Number(v.quantite) || 0;
+            const pu = Number(v.prixUnitaire) || 0;
+            const calc = qte * pu;
+            const mt = Number(v.montant) > 0 ? Number(v.montant) : calc;
+            const av = (v.avance !== undefined && v.avance !== null && Number(v.avance) > 0)
+              ? Number(v.avance)
+              : (v.statutPaiement === 'Payee' ? mt : (Number(v.avance) || 0));
+            const rel = (v.reliquat !== undefined && v.reliquat !== null)
+              ? Number(v.reliquat)
+              : (v.statutPaiement === 'Payee' ? 0 : Math.max(0, mt - av));
+            return {
+              ...v,
+              montant: mt,
+              avance: av,
+              reliquat: rel,
+            };
+          }) as T;
+        }
       }
       return parsed;
     }
