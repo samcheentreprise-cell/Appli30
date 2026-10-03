@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { CommandePoussin, Client, OAC } from '../types';
+import { CommandePoussin, Client, OAC, UserRole } from '../types';
 
 interface CommandesPoussinsModuleProps {
   commandes: CommandePoussin[];
   clients: Client[];
   oacList: OAC[];
+  currentUser: {username: string, role: UserRole} | null;
   onAddCommande: (cmd: CommandePoussin) => void;
   onUpdateCommande?: (cmd: CommandePoussin) => void;
   onDeleteCommande?: (id: string) => void;
@@ -56,6 +57,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   commandes,
   clients,
   oacList,
+  currentUser,
   onAddCommande,
   onUpdateCommande,
   onDeleteCommande,
@@ -413,6 +415,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       total: montantTotal,
       statut: 'En attente',
       notes,
+      receptionnaire: currentUser?.username || 'Système',
     };
 
     onAddCommande(newCmd);

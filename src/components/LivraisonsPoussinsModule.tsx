@@ -2705,6 +2705,7 @@ Bamako, Mali`;
                     <Key className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="password"
+                      autoComplete="current-password"
                       placeholder="Entrez le code PIN Superviseur..."
                       value={adminUnlockModal.pin}
                       onChange={(e) => setAdminUnlockModal((prev) => ({ ...prev, pin: e.target.value, error: undefined }))}

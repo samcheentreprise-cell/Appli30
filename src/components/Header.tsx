@@ -1,11 +1,13 @@
 import React from 'react';
 import { UserRole } from '../types';
-import { RefreshCw, Shield, User, CheckCircle2, AlertCircle, LogOut, ExternalLink } from 'lucide-react';
+import { RefreshCw, ExternalLink } from 'lucide-react';
 import { SamcheLogo } from './SamcheLogo';
+import { PWAInstallButton } from './PWAInstallButton';
+// ... rest of imports
 
+// ... HeaderProps interface (remove currentRole, setCurrentRole if not used)
 interface HeaderProps {
   currentRole: UserRole;
-  setCurrentRole: (role: UserRole) => void;
   syncStatus: { syncing: boolean; lastSync: string; error?: string };
   onTriggerSync: () => void;
   activeTab: string;
@@ -16,7 +18,6 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   currentRole,
-  setCurrentRole,
   syncStatus,
   onTriggerSync,
   activeTab,
@@ -24,8 +25,6 @@ export const Header: React.FC<HeaderProps> = ({
   pendingSoumissionsCount = 0,
   rejectedSoumissionsCount = 0,
 }) => {
-  const roles: UserRole[] = ['admin', 'utilisateur', 'comptable'];
-
   // Navigation Items
   const navItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: '📊', roles: ['admin', 'comptable'] },
@@ -104,23 +103,7 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
 
-            <div className="flex items-center gap-2 bg-slate-900/80 border border-slate-700/70 rounded-xl px-2.5 py-1.5 text-xs">
-              <Shield className="w-3.5 h-3.5 text-amber-400" />
-              <select
-                value={currentRole}
-                onChange={(e) => {
-                  setCurrentRole(e.target.value as UserRole);
-                  setActiveTab('dashboard'); // Redirect to dashboard on role switch
-                }}
-                className="bg-transparent text-amber-200 font-semibold focus:outline-none cursor-pointer text-xs"
-              >
-                {roles.map((r) => (
-                  <option key={r} value={r} className="bg-slate-900 text-white">
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <PWAInstallButton />
           </div>
         </div>
 

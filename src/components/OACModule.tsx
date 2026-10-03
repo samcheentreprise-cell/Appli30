@@ -882,7 +882,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   const isRejected = s.statut === 'Rejeté';
 
                   return (
-                    <tr key={idx} className="hover:bg-[#fff3cd]/80 transition">
+                    <tr key={s.idSoumission} className="hover:bg-[#fff3cd]/80 transition">
                       <td className="px-3 py-2.5 whitespace-nowrap font-medium">{s.dateSoumission}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap font-bold text-slate-900">
                         {s.type}
@@ -1576,14 +1576,14 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {oacList.map((item) => {
+                  {oacList.map((item, idx) => {
                     const isRowSelected = selM === item.id;
                     const incubes = item.cubes || (item.cartons * 360 - item.nbCasses);
                     const fertiles = item.fertiles !== undefined && item.fertiles !== null ? item.fertiles : incubes;
 
                     return (
                       <tr
-                        key={item.id + item.eclosion}
+                        key={item.id + item.eclosion + idx}
                         onClick={() => loadM(item)}
                         className={`cursor-pointer transition ${
                           isRowSelected
@@ -1811,12 +1811,12 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {oacList.map((item) => {
+                  {oacList.map((item, idx) => {
                     const isRowSelected = selE === item.id;
 
                     return (
                       <tr
-                        key={item.id + item.eclosion}
+                        key={item.id + item.eclosion + idx}
                         onClick={() => loadE(item)}
                         className={`cursor-pointer transition ${
                           isRowSelected

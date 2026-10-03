@@ -298,6 +298,12 @@ export const api = {
   // -- Clients --
   async listerClients() {
     return callApi('clients.lister');
+  },
+  async listerUtilisateurs() {
+    return callApi('utilisateurs.lister');
+  },
+  async authentifier(data: any) {
+    return callApi('utilisateurs.authentifier', data);
   }
 };
 

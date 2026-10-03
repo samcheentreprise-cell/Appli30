@@ -30,10 +30,13 @@ import { CaisseModule } from './components/CaisseModule';
 import { RechercheModule } from './components/RechercheModule';
 import { ParametresModule } from './components/ParametresModule';
 import { SyncModal } from './components/SyncModal';
+import { LoginScreen } from './components/LoginScreen';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [currentRole, setCurrentRole] = useState<UserRole>('admin');
+  const [currentUser, setCurrentUser] = useState<{username: string, role: UserRole} | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
 
   // Update tab when role changes
   useEffect(() => {
@@ -43,6 +46,12 @@ export default function App() {
       setActiveTab('dashboard');
     }
   }, [currentRole]);
+
+  const handleLogin = (user: {username: string, role: UserRole}) => {
+    setCurrentUser(user);
+    setCurrentRole(user.role);
+    setIsLoggedIn(true);
+  };
 
   // Application Data States with Persistence
   const [oacList, setOacList] = useState<OAC[]>(() =>
@@ -583,218 +592,225 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
-      {/* Top Header */}
-      <Header
-        currentRole={currentRole}
-        setCurrentRole={setCurrentRole}
-        syncStatus={syncStatus}
-        onTriggerSync={() => setSyncModalOpen(true)}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        pendingSoumissionsCount={soumissions.filter((s) => s.statut === 'En attente').length}
-        rejectedSoumissionsCount={rejectedSoumissions.length}
-      />
-
-      {/* Operator Alert Banner for rejected submissions across all tabs */}
-      {currentRole === 'utilisateur' && rejectedSoumissions.length > 0 && (
-        <div className="bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white px-4 py-3 shadow-md border-b-2 border-red-800 animate-fade-in sticky top-[108px] z-30">
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs sm:text-sm">
-            <div className="flex items-center gap-3">
-              <span className="text-2xl animate-bounce">🚨</span>
-              <div>
-                <p className="font-extrabold tracking-wide">
-                  {rejectedSoumissions.length === 1 
-                    ? 'Déclaration rejetée par l’administrateur avec demande de correction !' 
-                    : `${rejectedSoumissions.length} déclarations rejetées par l’administrateur !`}
-                </p>
-                <p className="text-rose-100 text-xs mt-0.5">
-                  Motif : « {rejectedSoumissions[0]?.raison || 'Correction demandée par le superviseur'} » — Veuillez réajuster les données et renvoyer.
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => setActiveTab('oac')}
-              className="px-4 py-2 bg-white text-rose-700 hover:bg-rose-50 font-black rounded-xl text-xs shadow-md transition whitespace-nowrap cursor-pointer flex items-center gap-1.5"
-            >
-              <span>✏️</span>
-              <span>Corriger et renvoyer maintenant</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'oac' && (
-          <OACModule
-            oacList={oacList}
-            soumissions={soumissions}
-            onAddOAC={handleAddOAC}
-            onUpdateOAC={handleUpdateOAC}
-            onDeleteOAC={handleDeleteOAC}
-            onAddSoumission={handleAddSoumission}
-            onApproveSoumission={handleApproveSoumission}
-            onRejectSoumission={handleRejectSoumission}
-            onUpdateSoumission={handleUpdateSoumission}
-            onRefreshSoumissions={handleRefreshSoumissions}
-            role={currentRole}
-            onClose={() => setActiveTab(currentRole === 'utilisateur' ? 'calendrier' : 'dashboard')}
-          />
-        )}
-
-        {activeTab === 'calendrier' && (
-          <CalendrierModule 
-            oacList={oacList} 
-            soumissions={soumissions}
-            onNavigate={(tab) => setActiveTab(tab)}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-        
-        {activeTab === 'dashboard' && currentRole !== 'utilisateur' && (
-          <Dashboard
-            oacList={oacList}
-            depenses={depenses}
-            clients={clients}
-            factures={factures}
-            ventes={ventes}
-            role={currentRole}
-            onNavigate={(tab) => setActiveTab(tab)}
-            onOpenNewOAC={() => setActiveTab('oac')}
-            onOpenNewFacture={() => {
-              setActiveTab('factures');
-              setIsFactureModalOpen(true);
-            }}
-            onOpenNewDepense={() => {
-              setActiveTab('depenses');
-              setIsDepenseModalOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'commandes_poussins' && (
-          <CommandesPoussinsModule
-            commandes={commandesPoussins}
-            clients={clients}
-            oacList={oacList}
-            onAddCommande={handleAddCommandePoussin}
-            onUpdateCommande={handleUpdateCommandePoussin}
-            onDeleteCommande={handleDeleteCommandePoussin}
-            onAddClient={handleAddClient}
-            onNavigateToLivraisons={() => setActiveTab('livraisons')}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-
-        {activeTab === 'livraisons' && (
-          <LivraisonsPoussinsModule
-            commandes={commandesPoussins}
-            oacList={oacList}
-            clients={clients}
-            bordereaux={bordereaux}
-            userRole={currentRole}
-            onUpdateCommande={handleUpdateCommandePoussin}
-            onAddBordereau={handleAddBordereau}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-
-        {activeTab === 'ventes' && (
-          <VentesModule
-            ventes={ventes}
-            clients={clients}
-            oacList={oacList}
-            onAddVente={handleAddVente}
-            onUpdateVente={handleUpdateVente}
-            onDeleteVente={handleDeleteVente}
-            onAddClient={handleAddClient}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-
-        {activeTab === 'factures' && (
-          <FacturesModule
-            factures={factures}
-            clients={clients}
-            bordereaux={bordereaux}
-            onAddFacture={handleAddFacture}
-            onUpdateFacture={handleUpdateFacture}
-            onDeleteFacture={handleDeleteFacture}
-            onAddBordereau={handleAddBordereau}
-            onAddClient={handleAddClient}
-            onUpdateClient={handleUpdateClient}
-            onDeleteClient={handleDeleteClient}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-
-        {activeTab === 'depenses' && (
-          <DepensesModule
-            depenses={depenses}
-            oacList={oacList}
-            onAddDepense={handleAddDepense}
-            onUpdateDepense={handleUpdateDepense}
-            onDeleteDepense={handleDeleteDepense}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-
-        {activeTab === 'caisse' && (
-          <CaisseModule
-            mouvements={mouvementsCaisse}
-            onAddMouvement={handleAddMouvementCaisse}
-            onUpdateMouvement={handleUpdateMouvementCaisse}
-            onDeleteMouvement={handleDeleteMouvementCaisse}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-
-        {activeTab === 'clients' && (
-          <ClientsModule
-            clients={clients}
-            onAddClient={handleAddClient}
-          />
-        )}
-
-        {activeTab === 'recherche' && (
-          <RechercheModule
-            depenses={depenses}
-            ventes={ventes}
-            clients={clients}
-            onClose={() => setActiveTab('dashboard')}
-          />
-        )}
-
-        {activeTab === 'parametres' && (
-          <ParametresModule
+      {!isLoggedIn ? (
+        <LoginScreen onLogin={handleLogin} />
+      ) : (
+        <>
+          {/* Top Header */}
+          <Header
+            currentRole={currentRole}
+            setCurrentRole={setCurrentRole}
             syncStatus={syncStatus}
             onTriggerSync={() => setSyncModalOpen(true)}
-            onResetAllData={handleResetAllLocalData}
-            onClose={() => setActiveTab('dashboard')}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            pendingSoumissionsCount={soumissions.filter((s) => s.statut === 'En attente').length}
+            rejectedSoumissionsCount={rejectedSoumissions.length}
           />
-        )}
-      </main>
 
-      {/* Sync Status / Config Modal */}
-      <SyncModal
-        isOpen={syncModalOpen}
-        onClose={() => setSyncModalOpen(false)}
-        syncStatus={syncStatus}
-        onTriggerSync={handleTriggerSync}
-        lastResult={lastSyncResult}
-      />
+          {/* Operator Alert Banner for rejected submissions across all tabs */}
+          {currentRole === 'utilisateur' && rejectedSoumissions.length > 0 && (
+            <div className="bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white px-4 py-3 shadow-md border-b-2 border-red-800 animate-fade-in sticky top-[108px] z-30">
+              <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs sm:text-sm">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl animate-bounce">🚨</span>
+                  <div>
+                    <p className="font-extrabold tracking-wide">
+                      {rejectedSoumissions.length === 1 
+                        ? 'Déclaration rejetée par l’administrateur avec demande de correction !' 
+                        : `${rejectedSoumissions.length} déclarations rejetées par l’administrateur !`}
+                    </p>
+                    <p className="text-rose-100 text-xs mt-0.5">
+                      Motif : « {rejectedSoumissions[0]?.raison || 'Correction demandée par le superviseur'} » — Veuillez réajuster les données et renvoyer.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setActiveTab('oac')}
+                  className="px-4 py-2 bg-white text-rose-700 hover:bg-rose-50 font-black rounded-xl text-xs shadow-md transition whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                >
+                  <span>✏️</span>
+                  <span>Corriger et renvoyer maintenant</span>
+                </button>
+              </div>
+            </div>
+          )}
 
-      {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>
-            © {new Date().getFullYear()} <strong>Couvoir SAMCHE</strong> — Écloserie Moderne & Distribution Avicole (Bamako, Mali)
-          </span>
-          <span className="text-[11px] text-slate-400">
-            Version PWA • Synchronisation Google Sheets & Firebase
-          </span>
-        </div>
-      </footer>
+          {/* Main Container */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            {activeTab === 'oac' && (
+              <OACModule
+                oacList={oacList}
+                soumissions={soumissions}
+                onAddOAC={handleAddOAC}
+                onUpdateOAC={handleUpdateOAC}
+                onDeleteOAC={handleDeleteOAC}
+                onAddSoumission={handleAddSoumission}
+                onApproveSoumission={handleApproveSoumission}
+                onRejectSoumission={handleRejectSoumission}
+                onUpdateSoumission={handleUpdateSoumission}
+                onRefreshSoumissions={handleRefreshSoumissions}
+                role={currentRole}
+                onClose={() => setActiveTab(currentRole === 'utilisateur' ? 'calendrier' : 'dashboard')}
+              />
+            )}
+
+            {activeTab === 'calendrier' && (
+              <CalendrierModule 
+                oacList={oacList} 
+                soumissions={soumissions}
+                onNavigate={(tab) => setActiveTab(tab)}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+            
+            {activeTab === 'dashboard' && currentRole !== 'utilisateur' && (
+              <Dashboard
+                oacList={oacList}
+                depenses={depenses}
+                clients={clients}
+                factures={factures}
+                ventes={ventes}
+                role={currentRole}
+                onNavigate={(tab) => setActiveTab(tab)}
+                onOpenNewOAC={() => setActiveTab('oac')}
+                onOpenNewFacture={() => {
+                  setActiveTab('factures');
+                  setIsFactureModalOpen(true);
+                }}
+                onOpenNewDepense={() => {
+                  setActiveTab('depenses');
+                  setIsDepenseModalOpen(true);
+                }}
+              />
+            )}
+
+            {activeTab === 'commandes_poussins' && (
+              <CommandesPoussinsModule
+                commandes={commandesPoussins}
+                clients={clients}
+                oacList={oacList}
+                currentUser={currentUser}
+                onAddCommande={handleAddCommandePoussin}
+                onUpdateCommande={handleUpdateCommandePoussin}
+                onDeleteCommande={handleDeleteCommandePoussin}
+                onAddClient={handleAddClient}
+                onNavigateToLivraisons={() => setActiveTab('livraisons')}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {activeTab === 'livraisons' && (
+              <LivraisonsPoussinsModule
+                commandes={commandesPoussins}
+                oacList={oacList}
+                clients={clients}
+                bordereaux={bordereaux}
+                userRole={currentRole}
+                onUpdateCommande={handleUpdateCommandePoussin}
+                onAddBordereau={handleAddBordereau}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {activeTab === 'ventes' && (
+              <VentesModule
+                ventes={ventes}
+                clients={clients}
+                oacList={oacList}
+                onAddVente={handleAddVente}
+                onUpdateVente={handleUpdateVente}
+                onDeleteVente={handleDeleteVente}
+                onAddClient={handleAddClient}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {activeTab === 'factures' && (
+              <FacturesModule
+                factures={factures}
+                clients={clients}
+                bordereaux={bordereaux}
+                onAddFacture={handleAddFacture}
+                onUpdateFacture={handleUpdateFacture}
+                onDeleteFacture={handleDeleteFacture}
+                onAddBordereau={handleAddBordereau}
+                onAddClient={handleAddClient}
+                onUpdateClient={handleUpdateClient}
+                onDeleteClient={handleDeleteClient}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {activeTab === 'depenses' && (
+              <DepensesModule
+                depenses={depenses}
+                oacList={oacList}
+                onAddDepense={handleAddDepense}
+                onUpdateDepense={handleUpdateDepense}
+                onDeleteDepense={handleDeleteDepense}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {activeTab === 'caisse' && (
+              <CaisseModule
+                mouvements={mouvementsCaisse}
+                onAddMouvement={handleAddMouvementCaisse}
+                onUpdateMouvement={handleUpdateMouvementCaisse}
+                onDeleteMouvement={handleDeleteMouvementCaisse}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {activeTab === 'clients' && (
+              <ClientsModule
+                clients={clients}
+                onAddClient={handleAddClient}
+              />
+            )}
+
+            {activeTab === 'recherche' && (
+              <RechercheModule
+                depenses={depenses}
+                ventes={ventes}
+                clients={clients}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {activeTab === 'parametres' && (
+              <ParametresModule
+                syncStatus={syncStatus}
+                onTriggerSync={() => setSyncModalOpen(true)}
+                onResetAllData={handleResetAllLocalData}
+                onClose={() => setActiveTab('dashboard')}
+              />
+            )}
+          </main>
+
+          {/* Sync Status / Config Modal */}
+          <SyncModal
+            isOpen={syncModalOpen}
+            onClose={() => setSyncModalOpen(false)}
+            syncStatus={syncStatus}
+            onTriggerSync={handleTriggerSync}
+            lastResult={lastSyncResult}
+          />
+
+          {/* Footer */}
+          <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
+            <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+              <span>
+                © {new Date().getFullYear()} <strong>Couvoir SAMCHE</strong> — Écloserie Moderne & Distribution Avicole (Bamako, Mali)
+              </span>
+              <span className="text-[11px] text-slate-400">
+                Version PWA • Synchronisation Google Sheets & Firebase
+              </span>
+            </div>
+          </footer>
+        </>
+      )}
     </div>
   );
 }
