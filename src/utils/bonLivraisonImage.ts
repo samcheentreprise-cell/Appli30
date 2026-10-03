@@ -51,19 +51,37 @@ export async function generateSignedBonImage(data: BonImageData): Promise<{ blob
   ctx.fillStyle = gradient;
   ctx.fillRect(10, 10, canvas.width - 20, 150);
 
+  // Draw Official SamChe Logo in header
+  try {
+    const logoImg = await loadImage('/logo-samche.png');
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    if (typeof (ctx as any).roundRect === 'function') {
+      ctx.beginPath();
+      (ctx as any).roundRect(40, 25, 120, 120, 18);
+      ctx.fill();
+    } else {
+      ctx.fillRect(40, 25, 120, 120);
+    }
+    ctx.drawImage(logoImg, 45, 30, 110, 110);
+    ctx.restore();
+  } catch (err) {
+    console.warn('Canvas logo fallback:', err);
+  }
+
   // Couvoir Samche Title
   ctx.fillStyle = '#f59e0b';
   ctx.font = 'bold 36px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('COUVOIR SAMCHE', canvas.width / 2, 65);
+  ctx.fillText('COUVOIR SAMCHE', (canvas.width / 2) + 40, 65);
 
   ctx.fillStyle = '#e2e8f0';
   ctx.font = 'bold 18px sans-serif';
-  ctx.fillText("Production & Vente de Poussins d'un jour au Mali", canvas.width / 2, 100);
+  ctx.fillText("Production & Vente de Poussins d'un jour au Mali", (canvas.width / 2) + 40, 100);
 
   ctx.fillStyle = '#cbd5e1';
   ctx.font = 'normal 15px sans-serif';
-  ctx.fillText('Tél : +223 66 56 50 55 / +223 66 71 97 17 • Bamako, Mali', canvas.width / 2, 130);
+  ctx.fillText('Tél : +223 66 56 50 55 / +223 66 71 97 17 • Bamako, Mali', (canvas.width / 2) + 40, 130);
 
   // Document Badge Title
   ctx.fillStyle = '#0f172a';

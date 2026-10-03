@@ -64,24 +64,33 @@ app.all('/api/proxy', async (req, res) => {
 });
 
 async function startServer() {
-  const vite = await createViteServer({
-    server: { middlewareMode: true, host: '0.0.0.0' },
-    appType: 'spa'
-  });
-  
-  app.use(vite.middlewares);
+  const isProd = process.env.NODE_ENV === 'production' && fs.existsSync(path.resolve(__dirname, 'dist'));
 
-  app.use(async (req, res, next) => {
-    try {
-      const indexPath = path.resolve(__dirname, 'index.html');
-      let indexHtml = fs.readFileSync(indexPath, 'utf-8');
-      const template = await vite.transformIndexHtml(req.originalUrl, indexHtml);
-      res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
-    } catch (e: any) {
-      vite.ssrFixStacktrace(e);
-      next(e);
-    }
-  });
+  if (isProd) {
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  } else {
+    const vite = await createViteServer({
+      server: { middlewareMode: true, host: '0.0.0.0' },
+      appType: 'spa'
+    });
+    
+    app.use(vite.middlewares);
+
+    app.use(async (req, res, next) => {
+      try {
+        const indexPath = path.resolve(__dirname, 'index.html');
+        let indexHtml = fs.readFileSync(indexPath, 'utf-8');
+        const template = await vite.transformIndexHtml(req.originalUrl, indexHtml);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        vite.ssrFixStacktrace(e);
+        next(e);
+      }
+    });
+  }
 
   app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${port}`);

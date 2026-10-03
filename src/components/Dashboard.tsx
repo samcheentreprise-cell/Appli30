@@ -202,16 +202,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
       <div className="bg-gradient-to-r from-[#1e3a5f] to-[#1e40af] rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
         {/* Left branding */}
         <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-full bg-white flex items-center justify-center shadow-md p-1 flex-shrink-0">
-            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#1e3a5f] to-[#2563eb] text-white font-black text-xs flex items-center justify-center">
-              CS
-            </div>
+          <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center shadow-md p-1.5 flex-shrink-0 border border-white/20">
+            <img
+              src="/logo-samche.png"
+              alt="Logo SamChe"
+              className="w-full h-full object-contain"
+              onError={(e) => {
+                e.currentTarget.src = '/logo-samche.svg';
+              }}
+            />
           </div>
           <div>
-            <h1 className="text-lg sm:text-xl font-extrabold text-white tracking-tight leading-tight">
-              Couvoir SAMCHE
+            <h1 className="text-lg sm:text-xl font-extrabold text-white tracking-tight leading-tight flex items-center gap-1.5 font-serif">
+              Couvoir <span className="text-amber-400 font-sans">SAMCHE</span>
             </h1>
-            <p className="text-xs text-white/70 font-medium">Tableau de bord</p>
+            <p className="text-xs text-white/70 font-medium">Tableau de bord de gestion</p>
           </div>
         </div>
 

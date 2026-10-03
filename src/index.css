@@ -1,1 +1,27 @@
 @import "tailwindcss";
+
+@layer utilities {
+  @media print {
+    body * {
+      visibility: hidden !important;
+    }
+    #printable-facture-doc,
+    #printable-facture-doc *,
+    #bon-livraison-print,
+    #bon-livraison-print * {
+      visibility: visible !important;
+    }
+    #printable-facture-doc,
+    #bon-livraison-print {
+      position: absolute !important;
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+      margin: 0 !important;
+      padding: 24px !important;
+      background: white !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+  }
+}

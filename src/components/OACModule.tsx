@@ -105,6 +105,8 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const [selectedSoumission, setSelectedSoumission] = useState<SoumissionEnAttente | null>(null);
   const [approveIdChoisi, setApproveIdChoisi] = useState<string>('');
   const [approveIdError, setApproveIdError] = useState(false);
+  const [showRejectFormInModal, setShowRejectFormInModal] = useState(false);
+  const [modalRejectRaison, setModalRejectRaison] = useState('');
 
   // Rejection Prompt Modal state
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
@@ -578,6 +580,8 @@ export const OACModule: React.FC<OACModuleProps> = ({
     setEditDonnees(initialData);
     setApproveIdChoisi(soumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`);
     setApproveIdError(false);
+    setShowRejectFormInModal(false);
+    setModalRejectRaison('');
     setApproveModalOpen(true);
   };
 
@@ -587,19 +591,33 @@ export const OACModule: React.FC<OACModuleProps> = ({
       setApproveIdError(true);
       return;
     }
-    onApproveSoumission(selectedSoumission.idSoumission, approveIdChoisi.trim(), editDonnees);
+    const finalId = selectedSoumission.type === 'Commande'
+      ? approveIdChoisi.trim()
+      : (editDonnees.id || selectedSoumission.donnees?.id);
+
+    onApproveSoumission(selectedSoumission.idSoumission, finalId, editDonnees);
     playAlertSound('success');
-    showNotification(`Soumission ${selectedSoumission.type} approuvée et intégrée avec succès !`, true);
+    showNotification(`Soumission ${selectedSoumission.type} validée et enregistrée avec succès !`, true);
     setApproveModalOpen(false);
     setSelectedSoumission(null);
+    setShowRejectFormInModal(false);
+  };
+
+  const handleConfirmRejectFromModal = () => {
+    if (!selectedSoumission) return;
+    const raison = modalRejectRaison.trim() || 'Correction demandée par le superviseur';
+    onRejectSoumission(selectedSoumission.idSoumission, raison);
+    playAlertSound('rejection');
+    showNotification("Soumission rejetée. L'opérateur a reçu une alerte sonore et une demande de correction sur son téléphone.", true);
+    setApproveModalOpen(false);
+    setSelectedSoumission(null);
+    setShowRejectFormInModal(false);
+    setModalRejectRaison('');
   };
 
   const handleRejectFromApprove = () => {
-    if (!selectedSoumission) return;
-    setRejectSoumissionId(selectedSoumission.idSoumission);
-    setRejectRaison('');
-    setApproveModalOpen(false);
-    setRejectModalOpen(true);
+    setShowRejectFormInModal(true);
+    setModalRejectRaison('');
   };
 
   const handleOpenReject = (soumission: SoumissionEnAttente) => {
@@ -693,22 +711,22 @@ export const OACModule: React.FC<OACModuleProps> = ({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          2 MAIN TOP-LEVEL TABS (Requested by user: Validation Admin by default)
+          2 MAIN TOP-LEVEL TABS (Validation Admin / Suivi déclarations)
          ══════════════════════════════════════════════════════════════════════════ */}
       <div className="flex flex-wrap items-center gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm">
-        {role === 'admin' && (
-          <button
-            type="button"
-            onClick={() => setMainTab('validation')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm ${
-              mainTab === 'validation'
-                ? 'bg-gradient-to-r from-[#b8860b] to-[#f39c12] text-white shadow-md ring-2 ring-[#f39c12]/40'
-                : 'bg-[#f8f9fa] text-slate-700 hover:bg-amber-50 hover:text-[#b8860b] border border-slate-200'
-            }`}
-          >
-            <span>✅</span>
-            <span>{role === 'admin' ? 'Validation admin — Soumissions en attente' : 'Suivi de mes soumissions (Validation)'}</span>
-            {pendingCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => setMainTab('validation')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm cursor-pointer ${
+            mainTab === 'validation'
+              ? 'bg-gradient-to-r from-[#b8860b] to-[#f39c12] text-white shadow-md ring-2 ring-[#f39c12]/40'
+              : 'bg-[#f8f9fa] text-slate-700 hover:bg-amber-50 hover:text-[#b8860b] border border-slate-200'
+          }`}
+        >
+          <span>✅</span>
+          <span>{role === 'admin' ? 'Validation admin — Soumissions' : 'Suivi de mes déclarations'}</span>
+          {role === 'admin' ? (
+            pendingCount > 0 ? (
               <span
                 className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
                   mainTab === 'validation'
@@ -718,18 +736,25 @@ export const OACModule: React.FC<OACModuleProps> = ({
               >
                 {pendingCount}
               </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/30 text-white">
-                0
+            ) : null
+          ) : (
+            rejectedCount > 0 ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse flex items-center gap-1 shadow-xs">
+                <span>⚠️</span>
+                <span>{rejectedCount} à corriger</span>
               </span>
-            )}
-          </button>
-        )}
+            ) : pendingCount > 0 ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white">
+                {pendingCount} en attente
+              </span>
+            ) : null
+          )}
+        </button>
 
         <button
           type="button"
           onClick={() => setMainTab('cycle')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm ${
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm tracking-wide transition-all shadow-sm cursor-pointer ${
             mainTab === 'cycle'
               ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md ring-2 ring-[#2E86C1]/40'
               : 'bg-[#f8f9fa] text-slate-700 hover:bg-sky-50 hover:text-[#1B4F72] border border-slate-200'
@@ -748,9 +773,9 @@ export const OACModule: React.FC<OACModuleProps> = ({
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          MAIN TAB 1: VALIDATION ADMIN — SOUMISSIONS EN ATTENTE (Active by default)
+          MAIN TAB 1: VALIDATION ADMIN / SUIVI SOUMISSIONS
          ══════════════════════════════════════════════════════════════════════════ */}
-      {mainTab === 'validation' && role === 'admin' && (
+      {mainTab === 'validation' && (
         <div className="bg-gradient-to-br from-[#fff8e1] to-[#fffde7] border-2 border-[#f39c12] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 animate-fade-in">
           {/* Header */}
           <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b-2 border-[#f39c12]">
@@ -908,13 +933,27 @@ export const OACModule: React.FC<OACModuleProps> = ({
                             </span>
                           )
                         ) : (
-                          <span className="text-[11px] font-bold text-slate-600">
-                            {isPending 
-                              ? '⏳ En attente de validation admin' 
-                              : isApproved 
-                              ? `✔ Validé & Intégré (par ${s.validPar || 'admin'})` 
-                              : `✕ Rejeté : ${s.raison || 'Sans motif'}`}
-                          </span>
+                          isRejected ? (
+                            <div className="flex items-center justify-end gap-2">
+                              <span className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-lg max-w-[200px] truncate" title={s.raison}>
+                                « {s.raison || 'Correction requise'} »
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleStartCorrection(s)}
+                                className="bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-lg text-[11px] font-bold shadow-xs transition flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                              >
+                                <span>✏️</span>
+                                <span>Corriger</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] font-bold text-slate-600">
+                              {isPending 
+                                ? '⏳ En attente de validation admin' 
+                                : `✔ Validé & Intégré (par ${s.validPar || 'admin'})`}
+                            </span>
+                          )
                         )}
                       </td>
                     </tr>
@@ -938,6 +977,87 @@ export const OACModule: React.FC<OACModuleProps> = ({
          ══════════════════════════════════════════════════════════════════════════ */}
       {mainTab === 'cycle' && role !== 'comptable' && (
         <div className="space-y-4 animate-fade-in">
+          {/* Operator Alert Banner for rejected submissions */}
+          {role !== 'admin' && rejectedCount > 0 && (
+            <div className="bg-rose-50 border-2 border-rose-400 rounded-2xl p-4 shadow-sm space-y-2 mb-2 animate-pulse-subtle">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-rose-900 font-black text-sm">
+                  <span className="text-xl">🚨</span>
+                  <span>{rejectedCount} déclaration(s) rejetée(s) par l'administrateur</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMainTab('validation')}
+                  className="text-xs font-bold text-rose-700 underline hover:text-rose-900 cursor-pointer"
+                >
+                  Voir la liste complète →
+                </button>
+              </div>
+              <p className="text-xs text-rose-800 font-medium">
+                Des corrections ont été demandées. Cliquez sur "Corriger et renvoyer" pour réajuster vos chiffres.
+              </p>
+              <div className="space-y-1.5 pt-1">
+                {soumissions
+                  .filter((s) => s.statut === 'Rejeté')
+                  .slice(0, 3)
+                  .map((s) => (
+                    <div
+                      key={s.idSoumission}
+                      className="bg-white p-2.5 rounded-xl border border-rose-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs shadow-2xs"
+                    >
+                      <div>
+                        <span className="font-extrabold uppercase bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded text-[10px] mr-2">
+                          {s.type}
+                        </span>
+                        <span className="font-bold text-slate-800">{s.resume}</span>
+                        <div className="text-rose-700 font-semibold text-[11px] mt-0.5">
+                          Motif du rejet : <strong className="underline">{s.raison || 'Correction demandée'}</strong>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleStartCorrection(s)}
+                        className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-xs transition flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>✏️</span>
+                        <span>Corriger et renvoyer</span>
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {/* Active Correction Floating Banner */}
+          {activeCorrection && (
+            <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-2 animate-fade-in">
+              <div className="flex items-start gap-2.5">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <h4 className="font-black text-amber-900 text-sm">Mode correction activé — {activeCorrection.type}</h4>
+                  <p className="text-xs text-rose-700 font-bold mt-0.5">
+                    Motif du superviseur : « {activeCorrection.raison || 'Correction requise'} »
+                  </p>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Modifiez les chiffres erronés ci-dessous puis validez pour re-soumettre à l'administrateur.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveCorrection(null);
+                  if (tabActif === 0) razC();
+                  if (tabActif === 1) razM();
+                  if (tabActif === 2) razE();
+                }}
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold whitespace-nowrap cursor-pointer"
+              >
+                ✕ Annuler la correction
+              </button>
+            </div>
+          )}
+
           {/* Sub-Tabs Row (1. Commandes, 2. Mirage (J+18), 3. Eclosion (J+21)) */}
           <div className="flex border-b-[3px] border-[#2e86c1] gap-1 pt-1">
             <button
@@ -1160,7 +1280,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                       : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
-                  <span>{role === 'admin' ? '✔ ENREGISTRER DIRECTEMENT' : '📨 SOUMETTRE POUR VALIDATION'}</span>
+                  <span>
+                    {role === 'admin' 
+                      ? '✔ ENREGISTRER DIRECTEMENT' 
+                      : (activeCorrection && activeCorrection.type === 'Commande' 
+                          ? '📨 ENVOYER LA COMMANDE CORRIGÉE' 
+                          : '📨 SOUMETTRE POUR VALIDATION')}
+                  </span>
                 </button>
                 {role === 'admin' && (
                   <>
@@ -1371,7 +1497,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                       : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
-                  <span>{role === 'admin' ? '✔ ENREGISTRER DIRECTEMENT' : '📨 SOUMETTRE LE MIRAGE POUR VALIDATION'}</span>
+                  <span>
+                    {role === 'admin' 
+                      ? '✔ ENREGISTRER DIRECTEMENT' 
+                      : (activeCorrection && activeCorrection.type === 'Mirage' 
+                          ? '📨 ENVOYER LE MIRAGE CORRIGÉ' 
+                          : '📨 SOUMETTRE LE MIRAGE POUR VALIDATION')}
+                  </span>
                 </button>
                 {role === 'admin' && (
                   <>
@@ -1599,7 +1731,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                       : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
-                  <span>{role === 'admin' ? '✔ ENREGISTRER DIRECTEMENT' : '📨 SOUMETTRE L’ÉCLOSION POUR VALIDATION'}</span>
+                  <span>
+                    {role === 'admin' 
+                      ? '✔ ENREGISTRER DIRECTEMENT' 
+                      : (activeCorrection && activeCorrection.type === 'Éclosion' 
+                          ? '📨 ENVOYER L’ÉCLOSION CORRIGÉE' 
+                          : '📨 SOUMETTRE L’ÉCLOSION POUR VALIDATION')}
+                  </span>
                 </button>
                 {role === 'admin' && (
                   <>
@@ -1717,84 +1855,480 @@ export const OACModule: React.FC<OACModuleProps> = ({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          APPROVE MODAL (Exact approveModal from GAS / Screenshots)
+          APPROVE / MODIFY / REJECT MODAL (Admin Validation)
          ══════════════════════════════════════════════════════════════════════════ */}
-      {approveModalOpen && selectedSoumission && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-slate-200">
-            <div className="bg-gradient-to-r from-[#1E8449] to-[#27AE60] text-white px-6 py-3.5 flex items-center gap-2.5">
-              <span className="text-xl">✔</span>
-              <h3 className="font-bold text-base">Approuver cette soumission</h3>
-            </div>
-            <div className="p-6 space-y-4 text-sm">
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold">Type:</span>
-                  <span className="font-bold text-slate-900">{selectedSoumission.type}</span>
+      {approveModalOpen && selectedSoumission && (() => {
+        const sType = selectedSoumission.type;
+        const targetId = sType === 'Commande' 
+          ? approveIdChoisi 
+          : (editDonnees.id || selectedSoumission.donnees?.id);
+        const batch = oacList.find((x) => x.id === targetId);
+        const cubes = batch?.cubes || ((batch?.cartons || 0) * 360 - (batch?.nbCasses || 0)) || 0;
+        const fertilesOrigin = batch?.fertiles || cubes;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
+            <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl overflow-hidden border border-slate-200 my-auto">
+              {/* Modal Header */}
+              <div className="bg-gradient-to-r from-[#1E8449] to-[#27AE60] text-white px-5 sm:px-6 py-3.5 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">✔</span>
+                  <h3 className="font-bold text-base sm:text-lg">Validation Administrateur — {sType}</h3>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold">Date:</span>
-                  <span className="font-bold text-slate-900">{selectedSoumission.dateSoumission}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold">Soumis par:</span>
-                  <span className="font-bold text-slate-900">{selectedSoumission.soumisPar}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold">Résumé:</span>
-                  <span className="font-bold text-slate-900 text-right">{selectedSoumission.resume}</span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setApproveModalOpen(false)}
+                  className="text-white/80 hover:text-white text-xl font-bold p-1 leading-none cursor-pointer"
+                  title="Fermer"
+                >
+                  ✕
+                </button>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  ID (obligatoire) <span className="text-rose-600">*</span>
-                </label>
-                <div className="flex gap-2">
-                  <select
-                    value={approveIdChoisi}
-                    onChange={(e) => {
-                      setApproveIdChoisi(e.target.value);
-                      setApproveIdError(false);
-                    }}
-                    className={`w-full px-3 py-2 border rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
-                      approveIdChoisi ? 'border-emerald-500 bg-emerald-50/30' : 'border-slate-300'
-                    }`}
-                  >
-                    <option value="">-- Choisir un ID --</option>
-                    <option value={`OAC-2609-00${oacList.length + 1}`}>
-                      OAC-2609-00{oacList.length + 1} — Disponible (Dépenses)
-                    </option>
-                    <option value="OAC-2609-004">OAC-2609-004 — Disponible (Dépenses)</option>
-                    <option value="OAC-2609-005">OAC-2609-005 — Disponible (Dépenses)</option>
-                  </select>
+              {/* In-Modal Rejection Form */}
+              {showRejectFormInModal ? (
+                <div className="p-5 sm:p-6 space-y-4">
+                  <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-4 text-xs space-y-2">
+                    <div className="flex items-center gap-2 font-black text-rose-900 text-sm">
+                      <span>🚨</span>
+                      <span>Refuser la soumission pour correction</span>
+                    </div>
+                    <p className="text-rose-700 font-medium">
+                      Cette action avertira l'opérateur avec une <strong>alerte sonore</strong> sur son téléphone. Il sera invité à corriger ses données et renvoyer la déclaration pour validation.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-800 uppercase tracking-wide mb-1.5">
+                      Motif du rejet (transmis à l'opérateur) <span className="text-rose-600">*</span>
+                    </label>
+                    <textarea
+                      rows={3}
+                      autoFocus
+                      placeholder="Ex: Nombre d'œufs clairs supérieur aux œufs incubés, recomptez svp..."
+                      value={modalRejectRaison}
+                      onChange={(e) => setModalRejectRaison(e.target.value)}
+                      className="w-full px-3.5 py-2.5 border-2 border-rose-300 rounded-xl text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-rose-500 bg-white"
+                    />
+                  </div>
+
+                  <div className="bg-slate-50 -mx-6 -mb-6 p-4 px-6 border-t border-slate-200 flex justify-end gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowRejectFormInModal(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] cursor-pointer"
+                    >
+                      ← Revenir aux données
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmRejectFromModal}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-sm flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <span>✕</span>
+                      <span>Confirmer le rejet et notifier</span>
+                    </button>
+                  </div>
                 </div>
-                {approveIdError && (
-                  <p className="text-xs text-rose-600 font-semibold mt-1 bg-rose-50 p-2 rounded-lg border border-rose-200">
-                    Veuillez sélectionner ou renseigner un ID.
-                  </p>
-                )}
-              </div>
-            </div>
-            <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end gap-2.5">
-              <button
-                type="button"
-                onClick={() => setApproveModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0]"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                onClick={confirmApprove}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] shadow-sm"
-              >
-                ✔ Confirmer l'approbation
-              </button>
+              ) : (
+                /* Main Approval & Editing Form */
+                <div className="p-5 sm:p-6 space-y-4 text-sm max-h-[75vh] overflow-y-auto">
+                  {/* Summary Card */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-1.5 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-semibold">Type :</span>
+                      <span className="font-extrabold text-slate-900 bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md uppercase text-[10px]">
+                        {selectedSoumission.type}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-semibold">Date de soumission :</span>
+                      <span className="font-bold text-slate-900">{selectedSoumission.dateSoumission}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-semibold">Soumis par :</span>
+                      <span className="font-bold text-slate-900">{selectedSoumission.soumisPar}</span>
+                    </div>
+                    <div className="flex justify-between items-start gap-2">
+                      <span className="text-slate-500 font-semibold">Saisie initiale :</span>
+                      <span className="font-bold text-slate-800 text-right">{selectedSoumission.resume}</span>
+                    </div>
+                  </div>
+
+                  {/* ─────────────────────────────────────────────────────────────
+                      TYPE 1: MIRAGE (Pas de sélection d'ID! Modif clairs/fertiles)
+                     ───────────────────────────────────────────────────────────── */}
+                  {sType === 'Mirage' && (() => {
+                    const clairsVal = editDonnees.clairs !== undefined && editDonnees.clairs !== null ? editDonnees.clairs : '';
+                    const clairsNum = Number(clairsVal || 0);
+                    const fertilesRecalc = Math.max(0, cubes - clairsNum);
+                    const fertilitePct = cubes > 0 ? ((fertilesRecalc / cubes) * 100).toFixed(1) : '0';
+
+                    return (
+                      <div className="space-y-3">
+                        <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div>
+                            <span className="text-slate-500 font-semibold">Lot concerné :</span>
+                            <span className="font-black text-slate-900 ml-1.5 font-mono text-sm">{targetId}</span>
+                            {batch && <span className="text-slate-600 ml-2">({batch.type} - {batch.race})</span>}
+                          </div>
+                          <div className="font-bold text-amber-900 bg-amber-100 px-2.5 py-1 rounded-lg">
+                            Œufs incubés : {cubes.toLocaleString('fr-FR')}
+                          </div>
+                        </div>
+
+                        <div className="bg-white border-2 border-emerald-200 rounded-2xl p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-black text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                              <span>🥚</span>
+                              <span>Nombre d'œufs clairs (modifiable)</span>
+                              <span className="text-rose-600">*</span>
+                            </label>
+                            <span className="text-[11px] text-slate-500">
+                              Initial : <strong>{selectedSoumission.donnees?.clairs ?? 0}</strong>
+                            </span>
+                          </div>
+
+                          <input
+                            type="number"
+                            min="0"
+                            max={cubes > 0 ? cubes : undefined}
+                            value={clairsVal}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
+                              setEditDonnees({
+                                ...editDonnees,
+                                clairs: val,
+                                fertiles: Math.max(0, cubes - Number(val || 0)),
+                              });
+                            }}
+                            className="w-full px-4 py-2.5 bg-emerald-50/40 border-2 border-emerald-500 rounded-xl text-lg font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                            placeholder="0"
+                          />
+
+                          {/* Live Recalculated KPIs */}
+                          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs">
+                            <div className="bg-emerald-50 p-2.5 rounded-xl border border-emerald-100 flex flex-col">
+                              <span className="text-emerald-700 font-bold text-[11px]">Œufs fertiles recalculés</span>
+                              <span className="text-base font-black text-emerald-900 font-mono">
+                                {fertilesRecalc.toLocaleString('fr-FR')}
+                              </span>
+                            </div>
+                            <div className="bg-sky-50 p-2.5 rounded-xl border border-sky-100 flex flex-col">
+                              <span className="text-sky-700 font-bold text-[11px]">Taux de fertilité</span>
+                              <span className="text-base font-black text-sky-900 font-mono">
+                                {fertilitePct}%
+                              </span>
+                            </div>
+                          </div>
+
+                          {clairsNum > cubes && cubes > 0 && (
+                            <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2.5 rounded-xl text-xs font-bold flex items-center gap-2">
+                              <span>⚠️</span>
+                              <span>Incohérence : Le nombre d'œufs clairs ({clairsNum}) dépasse le total incubé ({cubes}). Vous devriez modifier la valeur ou rejeter pour correction.</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ─────────────────────────────────────────────────────────────
+                      TYPE 2: ÉCLOSION (Pas de sélection d'ID! Modif poussins)
+                     ───────────────────────────────────────────────────────────── */}
+                  {sType === 'Éclosion' && (() => {
+                    const commVal = editDonnees.commerciaux !== undefined && editDonnees.commerciaux !== null ? editDonnees.commerciaux : '';
+                    const hanVal = editDonnees.handicapes !== undefined && editDonnees.handicapes !== null ? editDonnees.handicapes : '';
+                    const morVal = editDonnees.morts !== undefined && editDonnees.morts !== null ? editDonnees.morts : '';
+                    
+                    const cNum = Number(commVal || 0);
+                    const bonus = Math.ceil(cNum * 0.02);
+                    const pourVente = Math.max(0, cNum - bonus);
+                    const tauxInc = cubes > 0 ? ((cNum / cubes) * 100).toFixed(1) : '0';
+                    const tauxFer = fertilesOrigin > 0 ? ((cNum / fertilesOrigin) * 100).toFixed(1) : '0';
+
+                    return (
+                      <div className="space-y-3">
+                        <div className="bg-blue-50/80 border border-blue-200 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div>
+                            <span className="text-slate-500 font-semibold">Lot concerné :</span>
+                            <span className="font-black text-slate-900 ml-1.5 font-mono text-sm">{targetId}</span>
+                            {batch && <span className="text-slate-600 ml-2">({batch.type} - {batch.race})</span>}
+                          </div>
+                          <div className="font-bold text-blue-900 bg-blue-100 px-2.5 py-1 rounded-lg">
+                            Fertiles : {fertilesOrigin.toLocaleString('fr-FR')} • Incubés : {cubes.toLocaleString('fr-FR')}
+                          </div>
+                        </div>
+
+                        <div className="bg-white border-2 border-emerald-200 rounded-2xl p-4 space-y-3">
+                          <p className="text-xs font-black text-slate-800 uppercase tracking-wide">
+                            🐣 Données d'éclosion modifiables par l'administrateur
+                          </p>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">
+                                Commerciaux <span className="text-rose-600">*</span>
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={commVal}
+                                onChange={(e) => {
+                                  const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
+                                  const num = Number(val || 0);
+                                  const b = Math.ceil(num * 0.02);
+                                  setEditDonnees({
+                                    ...editDonnees,
+                                    commerciaux: val,
+                                    nes: val,
+                                    pourVente: Math.max(0, num - b),
+                                  });
+                                }}
+                                className="w-full px-3 py-2 bg-emerald-50/40 border-2 border-emerald-500 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                                placeholder="0"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">
+                                Handicapés
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={hanVal}
+                                onChange={(e) => {
+                                  const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
+                                  setEditDonnees({ ...editDonnees, handicapes: val });
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                                placeholder="0"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">
+                                Morts en coquille
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={morVal}
+                                onChange={(e) => {
+                                  const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
+                                  setEditDonnees({ ...editDonnees, morts: val });
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                                placeholder="0"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Live Recalculated KPIs */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100 text-xs">
+                            <div className="bg-emerald-50 p-2 rounded-xl border border-emerald-100 flex flex-col">
+                              <span className="text-emerald-700 font-bold text-[10px]">Bonus 2%</span>
+                              <span className="text-sm font-black text-emerald-900 font-mono">{bonus}</span>
+                            </div>
+                            <div className="bg-blue-50 p-2 rounded-xl border border-blue-100 flex flex-col">
+                              <span className="text-blue-700 font-bold text-[10px]">Pour vente</span>
+                              <span className="text-sm font-black text-blue-900 font-mono">{pourVente}</span>
+                            </div>
+                            <div className="bg-amber-50 p-2 rounded-xl border border-amber-100 flex flex-col">
+                              <span className="text-amber-700 font-bold text-[10px]">Taux / fertiles</span>
+                              <span className="text-sm font-black text-amber-900 font-mono">{tauxFer}%</span>
+                            </div>
+                            <div className="bg-slate-100 p-2 rounded-xl border border-slate-200 flex flex-col">
+                              <span className="text-slate-600 font-bold text-[10px]">Taux / incubés</span>
+                              <span className="text-sm font-black text-slate-800 font-mono">{tauxInc}%</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ─────────────────────────────────────────────────────────────
+                      TYPE 3: COMMANDE (Choix ID + Modif paramètres de commande)
+                     ───────────────────────────────────────────────────────────── */}
+                  {sType === 'Commande' && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                          ID à attribuer (obligatoire) <span className="text-rose-600">*</span>
+                        </label>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <select
+                            value={approveIdChoisi}
+                            onChange={(e) => {
+                              setApproveIdChoisi(e.target.value);
+                              setApproveIdError(false);
+                            }}
+                            className={`flex-1 px-3 py-2 border rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                              approveIdChoisi ? 'border-emerald-500 bg-emerald-50/30' : 'border-slate-300'
+                            }`}
+                          >
+                            <option value="">-- Choisir un ID disponible --</option>
+                            <option value={selectedSoumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`}>
+                              {selectedSoumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`} — Suggéré
+                            </option>
+                            <option value="OAC-2609-003">OAC-2609-003 — Disponible (Dépenses)</option>
+                            <option value="OAC-2609-004">OAC-2609-004 — Disponible (Dépenses)</option>
+                            <option value="OAC-2609-005">OAC-2609-005 — Disponible (Dépenses)</option>
+                          </select>
+                          <input
+                            type="text"
+                            placeholder="Ou code personnalisé"
+                            value={approveIdChoisi}
+                            onChange={(e) => {
+                              setApproveIdChoisi(e.target.value);
+                              setApproveIdError(false);
+                            }}
+                            className="w-full sm:w-48 px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold font-mono focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+                        {approveIdError && (
+                          <p className="text-xs text-rose-600 font-semibold mt-1 bg-rose-50 p-2 rounded-lg border border-rose-200">
+                            Veuillez sélectionner ou renseigner un ID.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="bg-white border-2 border-emerald-200 rounded-2xl p-4 space-y-3">
+                        <p className="text-xs font-black text-slate-800 uppercase tracking-wide">
+                          📦 Données de commande modifiables
+                        </p>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Type de poussin</label>
+                            <select
+                              value={editDonnees.type || 'Chairs'}
+                              onChange={(e) => setEditDonnees({ ...editDonnees, type: e.target.value })}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
+                            >
+                              {TYPES_OAC.map((t) => (
+                                <option key={t} value={t}>{t}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Race</label>
+                            <select
+                              value={editDonnees.race || 'Ross 308'}
+                              onChange={(e) => setEditDonnees({ ...editDonnees, race: e.target.value })}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
+                            >
+                              {RACES_OAC.map((r) => (
+                                <option key={r} value={r}>{r}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Fournisseur</label>
+                            <select
+                              value={editDonnees.fournisseur || 'Pak tavuk'}
+                              onChange={(e) => setEditDonnees({ ...editDonnees, fournisseur: e.target.value })}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
+                            >
+                              {FOURNISSEURS_OAC.map((f) => (
+                                <option key={f} value={f}>{f}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Nombre de cartons</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={editDonnees.cartons ?? ''}
+                              onChange={(e) => setEditDonnees({ ...editDonnees, cartons: parseInt(e.target.value) || 0 })}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-black font-mono"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Œufs cassés</label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={editDonnees.casses ?? ''}
+                              onChange={(e) => setEditDonnees({ ...editDonnees, casses: parseInt(e.target.value) || 0 })}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-black font-mono"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Date d'incubation</label>
+                            <input
+                              type="date"
+                              value={editDonnees.date || ''}
+                              onChange={(e) => setEditDonnees({ ...editDonnees, date: e.target.value })}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Recalculated total */}
+                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs">
+                          <div className="bg-slate-100 p-2 rounded-xl flex flex-col">
+                            <span className="text-slate-600 font-semibold text-[10px]">Total reçus (cartons × 360)</span>
+                            <span className="text-sm font-black text-slate-900 font-mono">
+                              {((Number(editDonnees.cartons) || 0) * 360).toLocaleString('fr-FR')}
+                            </span>
+                          </div>
+                          <div className="bg-emerald-50 p-2 rounded-xl border border-emerald-100 flex flex-col">
+                            <span className="text-emerald-700 font-semibold text-[10px]">Œufs incubés (cubes)</span>
+                            <span className="text-sm font-black text-emerald-900 font-mono">
+                              {Math.max(0, ((Number(editDonnees.cartons) || 0) * 360) - (Number(editDonnees.casses) || 0)).toLocaleString('fr-FR')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Buttons in Modal */}
+                  <div className="bg-slate-50 -mx-6 -mb-6 p-4 px-6 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
+                    <button
+                      type="button"
+                      onClick={handleRejectFromApprove}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <span>✕</span>
+                      <span>Refuser / Rejeter</span>
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setApproveModalOpen(false)}
+                        className="px-4 py-2 rounded-xl text-xs font-bold bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] cursor-pointer"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmApprove}
+                        className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] shadow-sm flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <span>✔</span>
+                        <span>Confirmer l'approbation</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ══════════════════════════════════════════════════════════════════════════
           REJECT PROMPT MODAL (promptModal)

@@ -1,6 +1,7 @@
 import React from 'react';
 import { UserRole } from '../types';
-import { Egg, RefreshCw, Shield, User, CheckCircle2, AlertCircle, LogOut, ExternalLink } from 'lucide-react';
+import { RefreshCw, Shield, User, CheckCircle2, AlertCircle, LogOut, ExternalLink } from 'lucide-react';
+import { SamcheLogo } from './SamcheLogo';
 
 interface HeaderProps {
   currentRole: UserRole;
@@ -10,6 +11,7 @@ interface HeaderProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   pendingSoumissionsCount?: number;
+  rejectedSoumissionsCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,6 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   pendingSoumissionsCount = 0,
+  rejectedSoumissionsCount = 0,
 }) => {
   const roles: UserRole[] = ['admin', 'utilisateur', 'comptable'];
 
@@ -44,17 +47,27 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col sm:flex-row items-center justify-between py-3 gap-3">
           <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
-            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab(currentRole === 'utilisateur' ? 'calendrier' : 'dashboard')}>
-              <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center shadow-inner text-amber-400">
-                <Egg className="w-6 h-6 stroke-[2.2]" />
+            <div
+              className="flex items-center gap-3 cursor-pointer group"
+              onClick={() => setActiveTab(currentRole === 'utilisateur' ? 'calendrier' : 'dashboard')}
+            >
+              <div className="w-11 h-11 rounded-2xl bg-white p-1.5 flex items-center justify-center shadow-md border border-white/20 transition-transform group-hover:scale-105 flex-shrink-0">
+                <img
+                  src="/logo-samche.png"
+                  alt="Logo SamChe"
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    e.currentTarget.src = '/logo-samche.svg';
+                  }}
+                />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h1 className="text-xl font-black tracking-tight text-white flex items-center gap-1.5">
-                    COUVOIR <span className="text-amber-400">SAMCHE</span>
+                  <h1 className="text-xl font-black tracking-tight text-white flex items-center gap-1.5 font-serif">
+                    COUVOIR <span className="text-amber-400 font-sans">SAMCHE</span>
                   </h1>
                 </div>
-                <p className="text-xs text-sky-200/80 font-medium">Système de Gestion</p>
+                <p className="text-[11px] text-sky-200/80 font-medium">Système de Gestion Avicole</p>
               </div>
             </div>
           </div>
@@ -129,9 +142,15 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <span>{item.icon}</span>
                   <span>{item.label}</span>
-                  {item.id === 'oac' && pendingSoumissionsCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+                  {item.id === 'oac' && currentRole === 'admin' && pendingSoumissionsCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-slate-950 animate-pulse">
                       {pendingSoumissionsCount}
+                    </span>
+                  )}
+                  {item.id === 'oac' && currentRole === 'utilisateur' && (rejectedSoumissionsCount || 0) > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse shadow-sm flex items-center gap-1">
+                      <span>⚠️</span>
+                      <span>{rejectedSoumissionsCount} à corriger</span>
                     </span>
                   )}
                 </button>

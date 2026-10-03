@@ -159,6 +159,24 @@ export default function App() {
     const todayStr = new Date().toLocaleDateString('fr-FR');
     const d = modifiedDonnees || target.donnees || {};
 
+    let updatedResume = target.resume;
+    if (target.type === 'Mirage') {
+      const targetId = d.id || target.donnees?.id;
+      const clairsNum = Number(d.clairs) || 0;
+      const existing = oacList.find((x) => x.id === targetId);
+      const cubes = existing?.cubes || ((existing?.cartons || 0) * 360 - (existing?.nbCasses || 0)) || 0;
+      const fertilesNum = Math.max(0, cubes - clairsNum);
+      updatedResume = `Mirage lot ${targetId} : ${clairsNum} clairs, ${fertilesNum} fertiles`;
+    } else if (target.type === 'Éclosion') {
+      const targetId = d.id || target.donnees?.id;
+      const commNum = Number(d.commerciaux) || 0;
+      const hanNum = Number(d.handicapes) || 0;
+      const morNum = Number(d.morts) || 0;
+      updatedResume = `Éclosion lot ${targetId} : ${commNum} commerciaux, ${hanNum} handicapés, ${morNum} morts`;
+    } else if (target.type === 'Commande') {
+      updatedResume = `Commande ${d.type || 'Chairs'} (${d.race || 'Ross 308'}) - ${d.cartons || 0} cartons (${d.fournisseur || ''})`;
+    }
+
     setSoumissions((prev) =>
       prev.map((s) =>
         s.idSoumission === idSoumission
@@ -167,6 +185,7 @@ export default function App() {
               statut: 'Approuvé',
               validPar: currentRole === 'admin' ? 'Administrateur' : currentRole,
               dateValid: todayStr,
+              resume: updatedResume,
               donnees: d,
             }
           : s
@@ -177,7 +196,7 @@ export default function App() {
     syncPushToGoogleSheets({ 
       type: 'en_attente', 
       action: 'update', 
-      item: { idSoumission, statut: 'Approuvé', validPar: 'Administrateur', dateValid: todayStr } 
+      item: { idSoumission, statut: 'Approuvé', validPar: 'Administrateur', dateValid: todayStr, resume: updatedResume } 
     });
 
     playAlertSound('success');
@@ -551,6 +570,17 @@ export default function App() {
     };
   }, []);
 
+  // Monitor rejected declarations to play loud alert sound and phone vibration on operator device
+  const rejectedSoumissions = soumissions.filter((s) => s.statut === 'Rejeté');
+  const prevRejectedCountRef = React.useRef(rejectedSoumissions.length);
+
+  useEffect(() => {
+    if (currentRole === 'utilisateur' && rejectedSoumissions.length > prevRejectedCountRef.current) {
+      playAlertSound('rejection');
+    }
+    prevRejectedCountRef.current = rejectedSoumissions.length;
+  }, [rejectedSoumissions.length, currentRole]);
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
       {/* Top Header */}
@@ -562,7 +592,36 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         pendingSoumissionsCount={soumissions.filter((s) => s.statut === 'En attente').length}
+        rejectedSoumissionsCount={rejectedSoumissions.length}
       />
+
+      {/* Operator Alert Banner for rejected submissions across all tabs */}
+      {currentRole === 'utilisateur' && rejectedSoumissions.length > 0 && (
+        <div className="bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white px-4 py-3 shadow-md border-b-2 border-red-800 animate-fade-in sticky top-[108px] z-30">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs sm:text-sm">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl animate-bounce">🚨</span>
+              <div>
+                <p className="font-extrabold tracking-wide">
+                  {rejectedSoumissions.length === 1 
+                    ? 'Déclaration rejetée par l’administrateur avec demande de correction !' 
+                    : `${rejectedSoumissions.length} déclarations rejetées par l’administrateur !`}
+                </p>
+                <p className="text-rose-100 text-xs mt-0.5">
+                  Motif : « {rejectedSoumissions[0]?.raison || 'Correction demandée par le superviseur'} » — Veuillez réajuster les données et renvoyer.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveTab('oac')}
+              className="px-4 py-2 bg-white text-rose-700 hover:bg-rose-50 font-black rounded-xl text-xs shadow-md transition whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+            >
+              <span>✏️</span>
+              <span>Corriger et renvoyer maintenant</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -586,6 +645,7 @@ export default function App() {
         {activeTab === 'calendrier' && (
           <CalendrierModule 
             oacList={oacList} 
+            soumissions={soumissions}
             onNavigate={(tab) => setActiveTab(tab)}
             onClose={() => setActiveTab('dashboard')}
           />

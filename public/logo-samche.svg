@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <!-- SamChe Official Brand Logo -->
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <g transform="translate(250, 200) scale(1.18)">
+    <!-- Top Cyan Ribbon (Petal pointing UP) -->
+    <path d="M 0,-140 C 48,-95 82,-35 68,28 C 54,18 38,13 24,10 C 36,-30 16,-82 0,-110 C -16,-82 -36,-30 -24,10 C -38,13 -54,18 -68,28 C -82,-35 -48,-95 0,-140 Z" 
+          fill="#00AEEF" />
+
+    <!-- Bottom Left Green Ribbon (Petal pointing DOWN-LEFT) -->
+    <g transform="rotate(120)">
+      <path d="M 0,-140 C 48,-95 82,-35 68,28 C 54,18 38,13 24,10 C 36,-30 16,-82 0,-110 C -16,-82 -36,-30 -24,10 C -38,13 -54,18 -68,28 C -82,-35 -48,-95 0,-140 Z" 
+            fill="#00D000" />
+    </g>
+
+    <!-- Bottom Right Red Ribbon (Petal pointing DOWN-RIGHT) -->
+    <g transform="rotate(240)">
+      <path d="M 0,-140 C 48,-95 82,-35 68,28 C 54,18 38,13 24,10 C 36,-30 16,-82 0,-110 C -16,-82 -36,-30 -24,10 C -38,13 -54,18 -68,28 C -82,-35 -48,-95 0,-140 Z" 
+            fill="#FF0000" />
+    </g>
+
+    <!-- Interlacing overlap patches for seamless ribbon weaving -->
+    <path d="M 12,-98 C 24,-72 34,-42 36,-14 C 26,-12 16,-9 6,-4 C 5,-28 8,-62 12,-98 Z" fill="#00AEEF" />
+    <g transform="rotate(120)">
+      <path d="M 12,-98 C 24,-72 34,-42 36,-14 C 26,-12 16,-9 6,-4 C 5,-28 8,-62 12,-98 Z" fill="#00D000" />
+    </g>
+    <g transform="rotate(240)">
+      <path d="M 12,-98 C 24,-72 34,-42 36,-14 C 26,-12 16,-9 6,-4 C 5,-28 8,-62 12,-98 Z" fill="#FF0000" />
+    </g>
+  </g>
+
+  <!-- Typography SamChe -->
+  <text x="250" y="445" 
+        font-family="Georgia, 'Times New Roman', 'Playfair Display', serif" 
+        font-size="86" 
+        font-weight="bold" 
+        text-anchor="middle" 
+        letter-spacing="3"
+        fill="#111827">SamChe</text>
+</svg>

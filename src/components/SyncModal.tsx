@@ -136,13 +136,22 @@ function doPost(e) {
       <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 my-8">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2.5 rounded-xl bg-sky-500/15 text-sky-700">
-              <Database className="w-5 h-5" />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white p-1 border border-slate-200 shadow-2xs flex items-center justify-center shrink-0">
+              <img
+                src="/logo-samche.png"
+                alt="Logo SamChe"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  e.currentTarget.src = '/logo-samche.svg';
+                }}
+              />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900">Synchronisation Google Sheets</h3>
-              <p className="text-xs text-slate-500">Liaison bidirectionnelle Couvoir & Google Drive</p>
+              <h3 className="text-base sm:text-lg font-bold text-slate-900 font-serif">
+                Couvoir SAMCHE <span className="text-slate-500 font-sans font-normal text-xs">• Synchronisation</span>
+              </h3>
+              <p className="text-xs text-slate-500">Liaison bidirectionnelle Couvoir &amp; Google Drive</p>
             </div>
           </div>
           <button

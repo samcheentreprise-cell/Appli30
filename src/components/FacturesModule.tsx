@@ -99,7 +99,19 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
     client: string;
     total?: number;
     tel?: string;
+    date?: string;
+    adresse?: string;
+    refCmd?: string;
+    modeReglement?: string;
+    lignes?: Array<{ designation: string; qte: number; pu?: number; total?: number; unite?: string }>;
+    montantHT?: number;
+    remise?: number;
+    remiseVal?: number;
+    tva?: number;
+    tvaVal?: number;
+    notes?: string;
   } | null>(null);
+  const [isDocModalOpen, setIsDocModalOpen] = useState(false);
 
   // Search invoices tab state
   const [searchQuery, setSearchQuery] = useState('');
@@ -206,8 +218,8 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
     setBlLignes((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Reset Facture form
-  const razF = () => {
+  // Reset Facture form inputs
+  const resetFactureInputs = () => {
     setFactDate(isoToday);
     setFactModeReglement('Virement');
     setFactRefCmd('');
@@ -217,16 +229,24 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
     setFactAvecTVA(false);
     setFactNotes('');
     setFactLignes([{ designation: '', qte: 1, pu: 0 }]);
+  };
+
+  const razF = () => {
+    resetFactureInputs();
     setValidatedDoc(null);
   };
 
-  // Reset BL form
-  const razBL = () => {
+  // Reset BL form inputs
+  const resetBLInputs = () => {
     setBlDate(isoToday);
     setBlClient('');
     setBlAdresse('');
     setBlRefCmd('');
     setBlLignes([{ designation: '', qte: 1, unite: 'pcs', observations: '' }]);
+  };
+
+  const razBL = () => {
+    resetBLInputs();
     setValidatedDoc(null);
   };
 
@@ -306,7 +326,21 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
       client: factClient,
       total: Math.round(totalTTC),
       tel: selectedClientObj?.telephone || '',
+      date: formattedDate,
+      adresse: factAdresse,
+      refCmd: factRefCmd,
+      modeReglement: factModeReglement,
+      lignes: validLines.map((l) => ({ ...l, total: l.qte * l.pu })),
+      montantHT: Math.round(sousTotal),
+      remise: factRemise,
+      remiseVal: Math.round(remiseMnt),
+      tva: factAvecTVA ? factTVA : 0,
+      tvaVal: Math.round(tvaMnt),
+      notes: factNotes,
     });
+    setIsDocModalOpen(true);
+    // Immediately clear all input form fields
+    resetFactureInputs();
   };
 
   // Validate and Save BL
@@ -342,12 +376,23 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
       type: 'b',
       numero: nextNumBL,
       client: blClient,
+      date: formattedDate,
+      adresse: blAdresse,
+      refCmd: blRefCmd,
+      lignes: validLines.map((l) => ({ designation: l.designation, qte: l.qte, unite: l.unite })),
+      tel: clients.find((c) => c.label.toLowerCase() === blClient.toLowerCase())?.telephone || '',
     });
+    setIsDocModalOpen(true);
+    // Immediately clear all input form fields
+    resetBLInputs();
   };
 
   // Download printable PDF / View preview
   const handleDownloadPDF = () => {
-    window.print();
+    setIsDocModalOpen(true);
+    setTimeout(() => {
+      window.print();
+    }, 200);
   };
 
   // Send via WhatsApp
@@ -423,12 +468,23 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
       {/* ══════════════════════════════════════════════════════════════════════════
           TOP HEADER BAR (Dark Navy with Gold Tag)
          ══════════════════════════════════════════════════════════════════════════ */}
-      <div className="bg-[#1a3050] px-5 py-3.5 flex items-center justify-between text-white flex-shrink-0 shadow-sm">
-        <div className="flex items-center gap-2">
-          <span className="text-base sm:text-lg">📄</span>
-          <h1 className="text-xs sm:text-sm font-extrabold text-[#c8a850] tracking-wide">
-            SAMCHE — Factures &amp; BL
-          </h1>
+      <div className="bg-[#1a3050] px-5 py-3 flex items-center justify-between text-white flex-shrink-0 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-white p-1 flex items-center justify-center shadow-2xs flex-shrink-0">
+            <img
+              src="/logo-samche.png"
+              alt="Logo SamChe"
+              className="w-full h-full object-contain"
+              onError={(e) => {
+                e.currentTarget.src = '/logo-samche.svg';
+              }}
+            />
+          </div>
+          <div>
+            <h1 className="text-xs sm:text-sm font-extrabold text-[#c8a850] tracking-wide flex items-center gap-1.5 font-serif">
+              COUVOIR SAMCHE <span className="text-white/70 font-sans font-normal text-xs">— Factures &amp; BL</span>
+            </h1>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -1148,8 +1204,39 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                           <div className="flex items-center justify-center gap-1.5">
                             <button
                               type="button"
+                              title="Aperçu officiel et Impression"
+                              onClick={() => {
+                                setValidatedDoc({
+                                  type: 'f',
+                                  numero: f.numero,
+                                  client: f.client,
+                                  total: f.total,
+                                  tel: f.telephone || '',
+                                  date: f.date,
+                                  adresse: f.adresseClient || '',
+                                  refCmd: f.refCmd || '',
+                                  modeReglement: f.modeReglement,
+                                  lignes: f.lignes && f.lignes.length > 0
+                                    ? f.lignes.map(l => ({ ...l, total: l.qte * l.pu }))
+                                    : [{ designation: 'Poussins d’un jour', qte: f.nbArticles || 1, pu: Math.round(f.total / (f.nbArticles || 1)), total: f.total }],
+                                  montantHT: f.montantHT || f.total,
+                                  remise: f.remisePct || 0,
+                                  remiseVal: f.remiseVal || 0,
+                                  tva: f.tvaPct || 0,
+                                  tvaVal: f.tvaVal || 0,
+                                  notes: f.notes,
+                                });
+                                setIsDocModalOpen(true);
+                              }}
+                              className="px-2 py-1 rounded border border-sky-400 text-sky-700 hover:bg-sky-50 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>👁️</span>
+                              <span className="hidden sm:inline">Aperçu</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => setEditingFacture(f)}
-                              className="px-2 py-1 rounded border border-[#c8a850] text-[#1a3050] hover:bg-amber-50 text-xs font-bold"
+                              className="px-2 py-1 rounded border border-[#c8a850] text-[#1a3050] hover:bg-amber-50 text-xs font-bold cursor-pointer"
                             >
                               ✏️
                             </button>
@@ -1672,18 +1759,27 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
           <>
             <button
               type="button"
-              onClick={handleDownloadPDF}
-              className="px-4 py-2 bg-gradient-to-r from-[#0D6E6E] to-[#067B7B] hover:opacity-95 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition"
+              onClick={() => setIsDocModalOpen(true)}
+              className="px-4 py-2 bg-gradient-to-r from-sky-700 to-sky-900 hover:opacity-95 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition cursor-pointer"
             >
-              <span>📥</span>
-              <span>Télécharger PDF</span>
+              <span>👁️</span>
+              <span>Aperçu document ({validatedDoc.numero})</span>
             </button>
 
-            {validatedDoc.type === 'f' && (
+            <button
+              type="button"
+              onClick={handleDownloadPDF}
+              className="px-4 py-2 bg-gradient-to-r from-[#0D6E6E] to-[#067B7B] hover:opacity-95 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <span>📥</span>
+              <span>Imprimer / PDF</span>
+            </button>
+
+            {validatedDoc.tel && (
               <button
                 type="button"
                 onClick={handleSendWhatsApp}
-                className="px-4 py-2 bg-gradient-to-r from-[#128C7E] to-[#25D366] hover:opacity-95 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition"
+                className="px-4 py-2 bg-gradient-to-r from-[#128C7E] to-[#25D366] hover:opacity-95 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition cursor-pointer"
               >
                 <span>📲</span>
                 <span>Envoyer via WhatsApp</span>
@@ -1825,6 +1921,254 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
               >
                 ✓ Enregistrer client
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          OFFICIAL DOCUMENT PREVIEW & PRINT MODAL (Facture & Bon de Livraison)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {isDocModalOpen && validatedDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/70 backdrop-blur-xs animate-fade-in print:p-0 print:bg-white print:fixed">
+          <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl overflow-hidden border border-slate-200 max-h-[94vh] flex flex-col print:border-none print:shadow-none print:max-w-none print:w-full print:max-h-none">
+            {/* Modal Controls (Hidden in print) */}
+            <div className="bg-gradient-to-r from-[#1a3050] to-[#1e4d7b] px-6 py-4 text-white flex items-center justify-between print:hidden flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">📄</span>
+                <div>
+                  <h3 className="font-extrabold text-sm sm:text-base text-[#c8a850]">
+                    Document Officiel — {validatedDoc.type === 'f' ? 'Facture de Vente' : 'Bordereau de Livraison'}
+                  </h3>
+                  <p className="text-[11px] text-slate-300">
+                    N° {validatedDoc.numero} • Prêt pour expédition et impression
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-2 bg-[#c8a850] hover:bg-[#d8b860] text-slate-950 rounded-xl text-xs font-black shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>📥</span>
+                  <span>Imprimer / PDF</span>
+                </button>
+                {validatedDoc.tel && (
+                  <button
+                    type="button"
+                    onClick={handleSendWhatsApp}
+                    className="px-4 py-2 bg-[#25D366] hover:bg-[#20ba59] text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>📲</span>
+                    <span>Envoyer WhatsApp</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsDocModalOpen(false)}
+                  className="p-2 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Printable Document Sheet */}
+            <div className="p-6 sm:p-10 overflow-y-auto print:overflow-visible print:p-6 text-slate-800 space-y-6 bg-white" id="printable-facture-doc">
+              {/* Document Header with Official SamChe Logo */}
+              <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pb-6 border-b-2 border-slate-900">
+                <div className="flex items-center gap-4">
+                  <div className="w-20 h-20 rounded-2xl bg-white p-1 border border-slate-200 shadow-2xs flex-shrink-0 flex items-center justify-center">
+                    <img
+                      src="/logo-samche.png"
+                      alt="Logo SamChe"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.src = '/logo-samche.svg';
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <h1
+                      className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-tight"
+                      style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+                    >
+                      COUVOIR SAMCHE
+                    </h1>
+                    <p className="text-xs font-bold text-amber-600 uppercase tracking-wider mt-0.5">
+                      Production &amp; Vente de Poussins d'un Jour au Mali
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Agrément N° 0418/MDR-SG • RCCM : MA.BKO.2023.B.1142 • NIF : 085202611S
+                    </p>
+                    <p className="text-[11px] text-slate-600 font-semibold">
+                      Tél : +223 66 56 50 55 / +223 66 71 97 17 • Bamako, Mali
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-left sm:text-right w-full sm:w-auto bg-slate-50 p-3.5 sm:p-0 sm:bg-transparent rounded-xl border sm:border-none border-slate-200">
+                  <div className="inline-block bg-[#1a3050] text-[#c8a850] text-xs font-black uppercase px-3 py-1 rounded-md tracking-wider">
+                    {validatedDoc.type === 'f' ? 'FACTURE OFFICIELLE' : 'BORDEREAU DE LIVRAISON'}
+                  </div>
+                  <div className="text-lg font-black text-slate-900 mt-1 font-mono">
+                    N° {validatedDoc.numero}
+                  </div>
+                  <div className="text-xs text-slate-600 mt-0.5">
+                    Date : <strong>{validatedDoc.date || new Date().toLocaleDateString('fr-FR')}</strong>
+                  </div>
+                  {validatedDoc.refCmd && (
+                    <div className="text-xs text-slate-600 font-mono">
+                      Réf. Commande : <strong>{validatedDoc.refCmd}</strong>
+                    </div>
+                  )}
+                  {validatedDoc.modeReglement && (
+                    <div className="text-xs text-slate-600">
+                      Règlement : <strong>{validatedDoc.modeReglement}</strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Client Destinataire Card */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                <div>
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                    DESTINATAIRE / FACTURÉ À :
+                  </span>
+                  <div className="text-base font-extrabold text-slate-900">
+                    {validatedDoc.client}
+                  </div>
+                  {validatedDoc.adresse && (
+                    <div className="text-slate-600 mt-1">
+                      Adresse : <strong>{validatedDoc.adresse}</strong>
+                    </div>
+                  )}
+                  {validatedDoc.tel && (
+                    <div className="text-slate-600">
+                      Téléphone : <strong>{validatedDoc.tel}</strong>
+                    </div>
+                  )}
+                </div>
+
+                <div className="sm:text-right flex flex-col justify-end">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    LIEU D'ÉMISSION :
+                  </span>
+                  <div className="text-xs font-semibold text-slate-700">
+                    Bamako, République du Mali
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Échéance : <strong>30 jours</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Articles Table */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-[#1a3050] text-white uppercase text-[10px] font-black tracking-wider">
+                      <th className="py-3 px-4">Désignation</th>
+                      <th className="py-3 px-3 text-center">Quantité</th>
+                      {validatedDoc.type === 'f' && (
+                        <>
+                          <th className="py-3 px-4 text-right">Prix Unitaire</th>
+                          <th className="py-3 px-4 text-right">Total HT</th>
+                        </>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {(validatedDoc.lignes || []).map((ligne, idx) => (
+                      <tr key={idx} className="even:bg-slate-50/60">
+                        <td className="py-3 px-4 font-bold text-slate-800">
+                          {ligne.designation}
+                        </td>
+                        <td className="py-3 px-3 text-center font-black font-mono text-slate-900">
+                          {ligne.qte.toLocaleString('fr-FR')} {ligne.unite || ''}
+                        </td>
+                        {validatedDoc.type === 'f' && (
+                          <>
+                            <td className="py-3 px-4 text-right font-mono text-slate-600">
+                              {fm(ligne.pu || 0)} F
+                            </td>
+                            <td className="py-3 px-4 text-right font-black font-mono text-slate-900">
+                              {fm(ligne.total || (ligne.qte * (ligne.pu || 0)))} F
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Totals Section */}
+              {validatedDoc.type === 'f' && (
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pt-2">
+                  <div className="text-xs text-slate-500 max-w-sm space-y-1">
+                    {validatedDoc.notes && (
+                      <div>
+                        <strong>Conditions / Notes :</strong> {validatedDoc.notes}
+                      </div>
+                    )}
+                    <div className="italic text-[11px] text-slate-400">
+                      Règlement par virement bancaire ou espèces. Merci de votre confiance !
+                    </div>
+                  </div>
+
+                  <div className="w-full sm:w-72 bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2 text-xs">
+                    {validatedDoc.montantHT !== undefined && (
+                      <div className="flex justify-between text-slate-600 font-semibold">
+                        <span>Montant HT :</span>
+                        <span className="font-mono">{fm(validatedDoc.montantHT)} F</span>
+                      </div>
+                    )}
+                    {Boolean(validatedDoc.remise) && (
+                      <div className="flex justify-between text-rose-600 font-semibold">
+                        <span>Remise ({validatedDoc.remise}%) :</span>
+                        <span className="font-mono">- {fm(validatedDoc.remiseVal || 0)} F</span>
+                      </div>
+                    )}
+                    {Boolean(validatedDoc.tva) && (
+                      <div className="flex justify-between text-sky-700 font-semibold">
+                        <span>TVA ({validatedDoc.tva}%) :</span>
+                        <span className="font-mono">+ {fm(validatedDoc.tvaVal || 0)} F</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-sm sm:text-base font-black text-[#1a3050] pt-2 border-t-2 border-slate-300">
+                      <span>NET À PAYER :</span>
+                      <span className="text-[#c8a850] font-mono">{fm(validatedDoc.total || 0)} F CFA</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Official Stamp & Signature Block */}
+              <div className="pt-6 border-t border-slate-200 grid grid-cols-2 gap-6 text-xs">
+                <div>
+                  <span className="font-bold text-slate-500 block mb-8">
+                    Le Client (Bon pour accord) :
+                  </span>
+                  <div className="border-b border-dashed border-slate-300 w-48"></div>
+                </div>
+
+                <div className="text-right flex flex-col items-end">
+                  <span className="font-bold text-slate-500 block mb-2">
+                    Pour le Couvoir SAMCHE (Cachet &amp; Signature) :
+                  </span>
+                  {/* Official Visual Stamp */}
+                  <div className="w-36 h-24 border-2 border-indigo-700/80 rounded-2xl p-2 flex flex-col items-center justify-center text-center rotate-[-3deg] bg-indigo-50/30 text-indigo-900 shadow-2xs">
+                    <span className="text-[10px] font-black uppercase tracking-wider">★ COUVOIR SAMCHE ★</span>
+                    <span className="text-[9px] font-bold text-emerald-700">DIRECTION GÉNÉRALE</span>
+                    <span className="text-[8px] text-slate-500">Bamako - Mali</span>
+                    <span className="text-[8px] font-mono text-indigo-600 mt-0.5">VISA DIRECTION</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

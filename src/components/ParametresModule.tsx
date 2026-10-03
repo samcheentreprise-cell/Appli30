@@ -167,6 +167,41 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
       )}
 
       <div className="p-6 space-y-6 flex-1">
+        {/* 0. Identité de l'Entreprise & Logo Officiel */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5">
+            <div className="w-24 h-24 rounded-2xl bg-white p-2 border border-slate-200 shadow-xs flex items-center justify-center shrink-0">
+              <img
+                src="/logo-samche.png"
+                alt="Logo Officiel SamChe"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  e.currentTarget.src = '/logo-samche.svg';
+                }}
+              />
+            </div>
+            <div className="space-y-1.5 text-center sm:text-left flex-1">
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                <h2 className="text-xl font-black text-slate-900 font-serif">
+                  COUVOIR SAMCHE
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                  Logo Officiel Actif
+                </span>
+              </div>
+              <p className="text-xs font-semibold text-slate-600">
+                Production &amp; Vente de Poussins d'un jour au Mali • Bamako
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Tél : +223 66 56 50 55 / +223 66 71 97 17 • Email : couvoirsamche@gmail.com
+              </p>
+              <p className="text-[11px] text-sky-700 bg-sky-50 px-3 py-1.5 rounded-xl border border-sky-100 inline-block font-medium">
+                ✓ Ce logo officiel est automatiquement intégré sur vos factures, bordereaux de livraison et feuilles d'émargement envoyées aux clients.
+              </p>
+            </div>
+          </div>
+        </section>
+
         {/* 1. Synchronisation Google Sheets */}
         <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3">

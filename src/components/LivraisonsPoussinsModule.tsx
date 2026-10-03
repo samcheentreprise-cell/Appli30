@@ -438,6 +438,21 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
     isGenerating: false,
   });
 
+  // Client Direct Dispatch Modal (on validation)
+  const [clientDispatchModal, setClientDispatchModal] = useState<{
+    open: boolean;
+    cmd: CommandePoussin | null;
+    allDelivered: boolean;
+    customTel: string;
+    customEmail: string;
+  }>({
+    open: false,
+    cmd: null,
+    allDelivered: false,
+    customTel: '',
+    customEmail: '',
+  });
+
   // Admin Unlocked Orders State (in-memory & persisted)
   const [unlockedCmds, setUnlockedCmds] = useState<Record<string, { adminName: string; motif: string; date: string }>>(() => {
     try {
@@ -599,10 +614,11 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
     });
   };
 
-  // Quick 1-click validate delivery for a command
+  // Quick 1-click validate delivery for a command & trigger client dispatch + check all delivered
   const handleQuickValidate = (cmd: CommandePoussin) => {
     const cartons = Math.ceil(cmd.quantite / 50);
     const nowTime = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const nowDate = new Date().toLocaleDateString('fr-FR');
     
     updateDelivery(cmd.id, 'quantiteFournie', cmd.quantite);
     updateDelivery(cmd.id, 'statutLivraison', 'Livré');
@@ -618,11 +634,11 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
       statut: 'Livrée',
       quantiteFournie: cmd.quantite,
       statutLivraison: 'Livré',
-      receptionnaire: `${cmd.prenom} ${cmd.nom}`,
+      receptionnaire: deliveryRecords[cmd.id]?.receptionnaire || `${cmd.prenom} ${cmd.nom}`,
       heureLivraison: nowTime,
       nbCartons: cartons,
-      dateLivraison: new Date().toLocaleDateString('fr-FR'),
-      notes: (cmd.notes ? `${cmd.notes} | ` : '') + `Livré conforme le ${new Date().toLocaleDateString('fr-FR')} (${cmd.quantite} poussins, ${cartons} cartons)`,
+      dateLivraison: nowDate,
+      notes: (cmd.notes ? `${cmd.notes} | ` : '') + `Livré conforme le ${nowDate} (${cmd.quantite} poussins, ${cartons} cartons)`,
     };
     onUpdateCommande(updatedCmd);
     ensureBordereauForDelivery(cmd, cmd.quantite, cartons, {
@@ -634,7 +650,26 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
       notesLivraison: '',
     });
 
-    showToast(`Commande ${cmd.id} (${cmd.prenom} ${cmd.nom}) validée comme livrée à 100% (${cartons} cartons de 50). Bordereau officiel généré.`, true);
+    // Check if ALL commands of this batch are now delivered
+    const isAllDelivered = lotCommandes.length > 0 && lotCommandes.every((c) => {
+      if (c.id === cmd.id) return true;
+      const rec = deliveryRecords[c.id];
+      return (rec && rec.statutLivraison === 'Livré') || c.statut === 'Livrée' || c.statutLivraison === 'Livré';
+    });
+
+    const clientEmail = cmd.email || deliveryRecords[cmd.id]?.clientEmail || '';
+    const cleanTel = (cmd.tel || '').replace(/[^0-9]/g, '');
+
+    showToast(`Commande ${cmd.id} (${cmd.prenom} ${cmd.nom}) validée comme livrée à 100% (${cartons} cartons de 50).`, true);
+
+    // Launch direct client dispatch modal (WhatsApp and/or Email)
+    setClientDispatchModal({
+      open: true,
+      cmd: updatedCmd,
+      allDelivered: isAllDelivered,
+      customTel: cleanTel ? (cmd.tel || '') : '',
+      customEmail: clientEmail,
+    });
   };
 
   // Mass validate all orders in the current lot as compliant
@@ -672,7 +707,12 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
 
     setDeliveryRecords(next);
     localStorage.setItem('samche_livraisons_poussins', JSON.stringify(next));
-    showToast(`Toutes les commandes du lot (${lotCommandes.length}) ont été validées conformes et enregistrées en Bordereaux Google Sheets.`, true);
+    showToast(`Toutes les commandes du lot (${lotCommandes.length}) sont validées conformes et livrées à 100% ! Ouverture de l'Email Bilan Administrateurs.`, true);
+
+    // As per user request: "des que le statut de toutes les commandes est 'livré' il faut envoyer aux administrateurs l'Email bilan"
+    setTimeout(() => {
+      handleOpenLotAdminEmailModal();
+    }, 450);
   };
 
   // Save all modified delivery items to parent state & backend
@@ -708,7 +748,19 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
       }
     });
 
-    showToast(`${count} pointage(s) de livraison et bordereaux enregistrés sur Google Sheets avec succès.`, true);
+    const allDelivered = lotCommandes.length > 0 && lotCommandes.every((cmd) => {
+      const rec = deliveryRecords[cmd.id];
+      return (rec && rec.statutLivraison === 'Livré') || cmd.statut === 'Livrée';
+    });
+
+    if (allDelivered) {
+      showToast(`${count} pointage(s) enregistrés ! Toutes les commandes sont 100% livrées. L'Email bilan administrateurs est prêt.`, true);
+      setTimeout(() => {
+        handleOpenLotAdminEmailModal();
+      }, 500);
+    } else {
+      showToast(`${count} pointage(s) de livraison et bordereaux enregistrés sur Google Sheets avec succès.`, true);
+    }
   };
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -908,7 +960,7 @@ Bamako, Mali`;
   };
 
   const getAdminEmailDetails = (cmd: CommandePoussin) => {
-    const adminEmail = 'samcheentreprise@gmail.com';
+    const adminEmail = 'couvoirsamche@gmail.com, samcheentreprise@gmail.com';
     const rec = deliveryRecords[cmd.id] || {
       quantiteFournie: cmd.quantiteFournie !== undefined ? cmd.quantiteFournie : (cmd.statut === 'Livrée' ? cmd.quantite : cmd.quantite),
       statutLivraison: cmd.statutLivraison || (cmd.statut === 'Livrée' ? 'Livré' : 'En attente'),
@@ -921,7 +973,7 @@ Bamako, Mali`;
 
     const subject = `🚚 [Sortie Couvoir] Livraison #${cmd.id} - ${cmd.prenom} ${cmd.nom} (${rec.quantiteFournie} poussins)`;
     const body = 
-`Bonjour Administrateur,
+`Bonjour Administrateurs,
 
 Une sortie de poussins vient d'être enregistrée au Couvoir SAMCHE :
 
@@ -948,22 +1000,27 @@ Système de Gestion Couvoir SAMCHE`;
 
   const getLotAdminEmailDetails = () => {
     if (!currentLot) return null;
-    const adminEmail = 'samcheentreprise@gmail.com';
-    const subject = `📊 [Bilan Éclosion] Contrôle des Sorties - Lot ${currentLot.dateFormatee} (${currentLot.type})`;
+    const adminEmail = 'couvoirsamche@gmail.com, samcheentreprise@gmail.com';
+    const isAllDelivered = lotCommandes.length > 0 && lotCommandes.every(c => {
+      const rec = deliveryRecords[c.id];
+      return (rec && rec.statutLivraison === 'Livré') || c.statut === 'Livrée';
+    });
+    const statusTag = isAllDelivered ? '100% LIVRÉ' : `${nbLivrees}/${lotCommandes.length} Livrés`;
+    const subject = `📊 [Email Bilan Éclosion - ${statusTag}] Contrôle des Sorties - Lot ${currentLot.dateFormatee} (${currentLot.type})`;
 
     let clientsSummary = '';
     lotCommandes.forEach((cmd, idx) => {
       const rec = deliveryRecords[cmd.id];
       const fourni = rec?.quantiteFournie !== undefined ? rec.quantiteFournie : (cmd.quantiteFournie || (cmd.statut === 'Livrée' ? cmd.quantite : 0));
       const cartons = rec?.nbCartons || Math.ceil((fourni || cmd.quantite) / 50);
-      const isSigne = rec?.signatureClient || cmd.signatureClient ? '✓ Émargé' : 'Non signé';
-      clientsSummary += `${idx + 1}. ${cmd.prenom} ${cmd.nom} (${cmd.tel || '--'}) : Cmd ${cmd.quantite} -> Fourni ${fourni} (${cartons} ctn) | ${isSigne} | Statut: ${rec?.statutLivraison || cmd.statut}\n`;
+      const isSigne = rec?.signatureClient || cmd.signatureClient ? '✓ Émargé (Signé mobile)' : 'Non signé';
+      clientsSummary += `${idx + 1}. ${cmd.prenom} ${cmd.nom} (${cmd.tel || '--'}, ${cmd.email || 'sans email'}) : Cmd ${cmd.quantite.toLocaleString('fr-FR')} -> Fourni ${fourni.toLocaleString('fr-FR')} poussins (${cartons} ctn de 50) | ${isSigne} | Statut: ${rec?.statutLivraison || cmd.statut || 'Livré'}\n`;
     });
 
     const body = 
-`Bonjour Administrateur,
+`Bonjour Administrateurs,
 
-Voici le bilan complet du contrôle des sorties de poussins pour le lot d'éclosion en cours :
+Voici le bilan officiel complet du contrôle des sorties de poussins pour le lot d'éclosion en cours :
 
 --- FICHE DU LOT D'ÉCLOSION EN COURS ---
 • Date d'éclosion : ${currentLot.dateFormatee}
@@ -971,21 +1028,23 @@ Voici le bilan complet du contrôle des sorties de poussins pour le lot d'éclos
 • N° Lot OAC : ${currentLot.lotId || '--'}
 • Poussins attendus / prévus : ${totalPrevu.toLocaleString('fr-FR')} poussins
 
---- STATISTIQUES DES SORTIES (50 poussins / carton) ---
+--- STATISTIQUES DES SORTIES (Conditionnement : 50 poussins / carton) ---
+• Statut Global : ${isAllDelivered ? 'TOUTES LES COMMANDES SONT 100% LIVRÉES' : 'Sorties en cours de livraison'}
 • Nombre de commandes associées : ${lotCommandes.length}
 • Total poussins commandés : ${totalCommandee.toLocaleString('fr-FR')}
 • Total poussins réellement fournis : ${totalFournie.toLocaleString('fr-FR')}
 • Total cartons remis : ${totalCartons} cartons (de 50 poussins)
 • Reste / Invendus en stock : ${(totalPrevu - totalFournie).toLocaleString('fr-FR')} poussins
 • Taux de service des commandes : ${tauxService}%
-• Commandes livrées : ${nbLivrees} / ${lotCommandes.length}
-• Commandes avec émargement mobile : ${nbSignes} / ${lotCommandes.length}
+• Commandes livrées : ${nbLivrees} / ${lotCommandes.length} (${isAllDelivered ? '100%' : `${tauxService}%`})
+• Commandes avec émargement mobile signé : ${nbSignes} / ${lotCommandes.length}
 
---- DÉTAIL DES COMMANDES DU LOT ---
+--- DÉTAIL COMPLET DES COMMANDES DU LOT ---
 ${clientsSummary}
 
-Rapport généré le ${new Date().toLocaleString('fr-FR')}
-Système de Gestion Couvoir SAMCHE`;
+Rapport certifié généré le ${new Date().toLocaleString('fr-FR')}
+Système de Gestion Couvoir SAMCHE
+Bamako, Mali`;
 
     return { adminEmail, subject, body };
   };
@@ -1080,7 +1139,27 @@ Système de Gestion Couvoir SAMCHE`;
         signatureClient: dataUrl,
       });
 
+      // Check if all commands of lot are now delivered
+      const isAllDelivered = lotCommandes.length > 0 && lotCommandes.every((c) => {
+        if (c.id === cmd.id) return true;
+        const r = deliveryRecords[c.id];
+        return (r && r.statutLivraison === 'Livré') || c.statut === 'Livrée' || c.statutLivraison === 'Livré';
+      });
+
       showToast(`Signature enregistrée avec succès pour ${cmd.prenom} ${cmd.nom}.`, true);
+      setSignatureModal({ open: false, type: 'client', signatoryName: '' });
+
+      // Automatically launch client dispatch modal with the newly signed BL
+      const clientEmail = cmd.email || deliveryRecords[cmd.id]?.clientEmail || '';
+      const cleanTel = (cmd.tel || '').replace(/[^0-9]/g, '');
+      setClientDispatchModal({
+        open: true,
+        cmd: updatedCmd,
+        allDelivered: isAllDelivered,
+        customTel: cleanTel ? (cmd.tel || '') : '',
+        customEmail: clientEmail,
+      });
+      return;
     } else if (signatureModal.type === 'visa_couvoir') {
       setVisaCouvoirSignature(dataUrl);
       try {
@@ -1310,6 +1389,41 @@ Système de Gestion Couvoir SAMCHE`;
           </div>
         </div>
       </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          BANNIÈRE SPÉCIALE: 100% LIVRÉ & BILAN ADMINISTRATEURS (Action Directe)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {nbLivrees === lotCommandes.length && lotCommandes.length > 0 && (
+        <div className="bg-gradient-to-r from-emerald-600 via-teal-700 to-sky-900 text-white p-5 px-6 rounded-3xl shadow-lg border border-emerald-400/50 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-white shrink-0 shadow-inner">
+              <CheckCircle2 className="w-7 h-7 text-emerald-300" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base sm:text-lg font-black tracking-tight text-white">
+                  🎉 100% des commandes du lot sont livrées !
+                </h3>
+                <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950 uppercase tracking-wide shadow-xs">
+                  Sorties Terminées
+                </span>
+              </div>
+              <p className="text-xs text-emerald-100 font-medium mt-0.5">
+                Total {totalFournie.toLocaleString('fr-FR')} poussins remis ({totalCartons} cartons) sur les {lotCommandes.length} commandes.
+                L'Email Bilan officiel est prêt à être expédié aux administrateurs (couvoirsamche@gmail.com, samcheentreprise@gmail.com).
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleOpenLotAdminEmailModal}
+            className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 shadow-lg shrink-0 transition active:scale-95"
+          >
+            <Shield className="w-4 h-4 text-slate-950" />
+            <span>Envoyer l'Email Bilan Administrateurs</span>
+          </button>
+        </div>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════════════════
           CARD 2: TABLEAU DES SORTIES DU LOT EN COURS
@@ -1845,6 +1959,17 @@ Système de Gestion Couvoir SAMCHE`;
                   <span>WhatsApp Bon Signé</span>
                 </button>
 
+                {/* Email client button */}
+                <button
+                  type="button"
+                  onClick={() => handleOpenClientEmailModal(selectedBonCmd)}
+                  className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                  title="Envoyer le bon de livraison par email au client"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>Email Bon</span>
+                </button>
+
                 {/* Print button */}
                 <button
                   type="button"
@@ -1868,17 +1993,29 @@ Système de Gestion Couvoir SAMCHE`;
             {/* Printable Content */}
             <div className="p-8 space-y-6 text-slate-800 print:p-6" id="bon-livraison-print">
               {/* Header Couvoir */}
-              <div className="border-b-2 border-slate-900 pb-4 flex justify-between items-start">
-                <div>
-                  <h2 className="text-2xl font-black tracking-tight text-slate-900">
-                    COUVOIR <span className="text-amber-500">SAMCHE</span>
-                  </h2>
-                  <p className="text-xs text-slate-500 font-semibold mt-0.5">
-                    Production & Vente de Poussins d'un jour de haute qualité
-                  </p>
-                  <p className="text-[11px] text-slate-400">
-                    Tél : +223 66 56 50 55 / +223 66 71 97 17 • Bamako, Mali
-                  </p>
+              <div className="border-b-2 border-slate-900 pb-4 flex justify-between items-center gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-16 h-16 rounded-xl bg-white p-1 border border-slate-200 shadow-2xs flex-shrink-0 flex items-center justify-center">
+                    <img
+                      src="/logo-samche.png"
+                      alt="Logo SamChe"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.src = '/logo-samche.svg';
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-black tracking-tight text-slate-900 font-serif">
+                      COUVOIR <span className="text-amber-500 font-sans">SAMCHE</span>
+                    </h2>
+                    <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                      Production &amp; Vente de Poussins d'un jour de haute qualité
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Tél : +223 66 56 50 55 / +223 66 71 97 17 • Bamako, Mali
+                    </p>
+                  </div>
                 </div>
                 <div className="text-right">
                   <div className="bg-slate-900 text-white text-xs font-black uppercase px-3 py-1 rounded-md tracking-wider">
@@ -2098,14 +2235,26 @@ Système de Gestion Couvoir SAMCHE`;
             {/* Printable Content */}
             <div className="p-6 sm:p-8 space-y-6 overflow-y-auto print:overflow-visible print:p-4 text-slate-800">
               {/* Header Couvoir */}
-              <div className="border-b-2 border-slate-900 pb-4 flex justify-between items-start">
-                <div>
-                  <h2 className="text-2xl font-black tracking-tight text-slate-900">
-                    COUVOIR <span className="text-amber-500">SAMCHE</span>
-                  </h2>
-                  <p className="text-xs text-slate-600 font-bold uppercase tracking-wider mt-1">
-                    FEUILLE D'ÉMARGEMENT & DE CONTRÔLE DES SORTIES POUSSINS (50 POUSSINS / CARTON)
-                  </p>
+              <div className="border-b-2 border-slate-900 pb-4 flex justify-between items-center gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-14 h-14 rounded-xl bg-white p-1 border border-slate-200 shadow-2xs flex-shrink-0 flex items-center justify-center">
+                    <img
+                      src="/logo-samche.png"
+                      alt="Logo SamChe"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.src = '/logo-samche.svg';
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-black tracking-tight text-slate-900 font-serif">
+                      COUVOIR <span className="text-amber-500 font-sans">SAMCHE</span>
+                    </h2>
+                    <p className="text-xs text-slate-600 font-bold uppercase tracking-wider mt-0.5">
+                      FEUILLE D'ÉMARGEMENT &amp; DE CONTRÔLE DES SORTIES POUSSINS (50 POUSSINS / CARTON)
+                    </p>
+                  </div>
                 </div>
                 <div className="text-right text-xs">
                   <div><strong>Date d'éclosion :</strong> {currentLot.dateFormatee}</div>
@@ -2467,7 +2616,39 @@ Système de Gestion Couvoir SAMCHE`;
                     <span>Télécharger Bon</span>
                   </a>
                 )}
+
+                {/* Send also by Email button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const c = whatsAppModalData.cmd;
+                    setWhatsAppModalData({ open: false, cmd: null, imgDataUrl: '', imgFile: null, waLink: '', isGenerating: false });
+                    if (c) handleOpenClientEmailModal(c);
+                  }}
+                  className="py-2.5 px-3 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-95 text-center"
+                  title="Envoyer également par Email au client"
+                >
+                  <Mail className="w-4 h-4" />
+                  <span>Envoyer aussi par Email</span>
+                </button>
               </div>
+
+              {/* If all delivered, offer instant Admin Email Bilan */}
+              {nbLivrees === lotCommandes.length && lotCommandes.length > 0 && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWhatsAppModalData({ open: false, cmd: null, imgDataUrl: '', imgFile: null, waLink: '', isGenerating: false });
+                      handleOpenLotAdminEmailModal();
+                    }}
+                    className="w-full py-2.5 px-4 bg-purple-700 hover:bg-purple-600 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-purple-200" />
+                    <span>🎉 100% Livré ! Envoyer l'Email Bilan aux Administrateurs</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2584,6 +2765,221 @@ Système de Gestion Couvoir SAMCHE`;
           </div>
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          MODAL 7: VALIDATION DE LIVRAISON & ENVOI DIRECT CLIENT (WhatsApp & Email)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {clientDispatchModal.open && clientDispatchModal.cmd && (() => {
+        const cmd = clientDispatchModal.cmd;
+        const rec = deliveryRecords[cmd.id];
+        const fourni = rec?.quantiteFournie ?? cmd.quantite;
+        const cartons = rec?.nbCartons || Math.ceil(fourni / 50);
+        const cleanTel = (clientDispatchModal.customTel || '').replace(/[^0-9]/g, '');
+        const hasValidPhone = cleanTel.length >= 6;
+        const hasValidEmail = Boolean(clientDispatchModal.customEmail && clientDispatchModal.customEmail.includes('@'));
+
+        const handleSendWhatsAppNow = () => {
+          const updatedWithTel: CommandePoussin = {
+            ...cmd,
+            tel: clientDispatchModal.customTel,
+          };
+          setClientDispatchModal({ open: false, cmd: null, allDelivered: false, customTel: '', customEmail: '' });
+          handleOpenWhatsAppShare(updatedWithTel);
+        };
+
+        const handleSendEmailNow = () => {
+          const updatedWithEmail: CommandePoussin = {
+            ...cmd,
+            email: clientDispatchModal.customEmail,
+          };
+          if (cmd.id) {
+            updateDelivery(cmd.id, 'clientEmail', clientDispatchModal.customEmail);
+          }
+          setClientDispatchModal({ open: false, cmd: null, allDelivered: false, customTel: '', customEmail: '' });
+          handleOpenClientEmailModal(updatedWithEmail);
+        };
+
+        const handleSendBothNow = async () => {
+          const updatedBoth: CommandePoussin = {
+            ...cmd,
+            tel: clientDispatchModal.customTel,
+            email: clientDispatchModal.customEmail,
+          };
+          if (cmd.id && clientDispatchModal.customEmail) {
+            updateDelivery(cmd.id, 'clientEmail', clientDispatchModal.customEmail);
+          }
+          setClientDispatchModal({ open: false, cmd: null, allDelivered: false, customTel: '', customEmail: '' });
+          await handleOpenWhatsAppShare(updatedBoth);
+          showToast('WhatsApp lancé ! Vous pouvez aussi envoyer par Email.', true);
+        };
+
+        const handleCloseModal = () => {
+          const shouldTriggerAdminBilan = clientDispatchModal.allDelivered;
+          setClientDispatchModal({ open: false, cmd: null, allDelivered: false, customTel: '', customEmail: '' });
+          if (shouldTriggerAdminBilan) {
+            setTimeout(() => {
+              handleOpenLotAdminEmailModal();
+            }, 300);
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl overflow-hidden border border-slate-200">
+              {/* Header */}
+              <div className="bg-gradient-to-r from-emerald-800 via-teal-900 to-slate-950 text-white p-4 px-6 flex items-center justify-between">
+                <div className="flex items-center gap-2 font-black text-sm">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  <span>Validation Réussie • Envoi Immédiat au Client</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseModal}
+                  className="p-1 hover:bg-white/20 rounded-lg text-white transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 space-y-4 text-xs">
+                {/* Status Callout */}
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-lg shrink-0 shadow-sm">
+                    ✓
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-extrabold text-slate-900 text-sm">
+                      Commande #{cmd.id} validée comme LIVRÉE
+                    </div>
+                    <div className="text-emerald-800 font-medium text-[11px] mt-0.5">
+                      {fourni.toLocaleString('fr-FR')} poussins remis ({cartons} cartons de 50) • Bordereau officiel généré.
+                    </div>
+                  </div>
+                </div>
+
+                {/* Recipient info & verification */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                  <div className="font-extrabold text-slate-900 text-sm flex items-center justify-between">
+                    <span>{cmd.prenom} {cmd.nom}</span>
+                    <span className="text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                      {cmd.ville || 'Bamako'}
+                    </span>
+                  </div>
+
+                  {/* Phone input */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                      <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Numéro WhatsApp Client :</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex : +223 70 00 00 00 ou 66565055"
+                      value={clientDispatchModal.customTel}
+                      onChange={(e) => setClientDispatchModal({ ...clientDispatchModal, customTel: e.target.value })}
+                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  {/* Email input */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                      <Mail className="w-3.5 h-3.5 text-sky-600" />
+                      <span>Email Client (optionnel) :</span>
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="client@gmail.com"
+                      value={clientDispatchModal.customEmail}
+                      onChange={(e) => setClientDispatchModal({ ...clientDispatchModal, customEmail: e.target.value })}
+                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+                </div>
+
+                {/* All delivered celebration banner if triggered */}
+                {clientDispatchModal.allDelivered && (
+                  <div className="p-3.5 bg-gradient-to-r from-purple-900 to-slate-900 text-white rounded-2xl border border-purple-400/50 shadow-md animate-fade-in">
+                    <div className="flex items-center gap-2 font-black text-amber-400 text-xs uppercase tracking-wide mb-1">
+                      <Sparkles className="w-4 h-4" />
+                      <span>🎉 Lot 100% Livré • Email Bilan Administrateurs</span>
+                    </div>
+                    <p className="text-[11px] text-purple-100 mb-2.5">
+                      Toutes les commandes du lot sont désormais terminées. L'Email bilan officiel est prêt à être expédié aux administrateurs.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setClientDispatchModal({ open: false, cmd: null, allDelivered: false, customTel: '', customEmail: '' });
+                        handleOpenLotAdminEmailModal();
+                      }}
+                      className="w-full py-2 px-3 bg-purple-500 hover:bg-purple-400 text-white font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition active:scale-95"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Envoyer l'Email Bilan aux Administrateurs</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Direct Action Buttons */}
+                <div className="space-y-2 pt-1">
+                  {/* WhatsApp button */}
+                  <button
+                    type="button"
+                    onClick={handleSendWhatsAppNow}
+                    disabled={!hasValidPhone}
+                    className={`w-full py-3 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-md transition active:scale-95 ${
+                      hasValidPhone
+                        ? 'bg-[#25D366] hover:bg-[#20ba5a] text-white cursor-pointer'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    <span>Envoyer le Bon de Livraison par WhatsApp</span>
+                  </button>
+
+                  {/* Email button */}
+                  <button
+                    type="button"
+                    onClick={handleSendEmailNow}
+                    disabled={!hasValidEmail}
+                    className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition active:scale-95 ${
+                      hasValidEmail
+                        ? 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'
+                        : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                    }`}
+                  >
+                    <Mail className="w-4 h-4" />
+                    <span>Envoyer le Bon de Livraison par Email</span>
+                  </button>
+
+                  {/* Send Both button */}
+                  {hasValidPhone && hasValidEmail && (
+                    <button
+                      type="button"
+                      onClick={handleSendBothNow}
+                      className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-sky-600 hover:from-emerald-500 hover:to-sky-500 text-white font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-md transition active:scale-95"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      <span>Envoyer aux deux (WhatsApp + Email)</span>
+                    </button>
+                  )}
+
+                  {/* Skip / Close */}
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="w-full py-2 px-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition text-center"
+                  >
+                    {clientDispatchModal.allDelivered ? "Passer à l'Email Bilan Admin" : "Fermer"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
