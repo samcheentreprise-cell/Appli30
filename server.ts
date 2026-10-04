@@ -8,8 +8,20 @@ import { createServer as createViteServer } from 'vite';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Add global error handlers
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+
 const app = express();
-const port = 3000;
+const port = Number(process.env.PORT) || 3000;
+console.log(`[startup] Server configured on port ${port}`);
 
 app.use(express.json());
 
@@ -22,7 +34,7 @@ app.all('/api/proxy', async (req, res) => {
     return res.status(400).json({ error: 'URL cible manquante' });
   }
   
-  console.log(`PROXY [${req.method}]: Relais vers`, targetUrl);
+  console.log(`[PROXY] Tentative de relais vers : ${targetUrl}`);
   try {
     const response = await axios({
       method: req.method,
@@ -33,8 +45,9 @@ app.all('/api/proxy', async (req, res) => {
         'Accept': 'application/json' 
       },
       timeout: 65000,
-      maxRedirects: 5 // Crucial: Google Apps Script Web Apps always redirect 302
+      maxRedirects: 5
     });
+    console.log(`[PROXY] Succès pour ${targetUrl}`);
 
     const contentType = String(response.headers['content-type'] || 'application/json');
     res.setHeader('Content-Type', contentType);
@@ -67,11 +80,18 @@ async function startServer() {
   const isProd = process.env.NODE_ENV === 'production' && fs.existsSync(path.resolve(__dirname, 'dist'));
 
   if (isProd) {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    const distPath = path.resolve(__dirname, 'dist');
+    if (!fs.existsSync(distPath)) {
+      console.error('[FATAL] Production mode but dist/ directory not found at', distPath);
+      process.exit(1);
+    }
+    app.use(express.static(distPath));
+    app.get('/{*splat}', (_req, res) => {
+      res.sendFile(path.resolve(distPath, 'index.html'));
     });
+    console.log('[startup] Running in production mode');
   } else {
+    console.log('[startup] Running in development mode');
     const vite = await createViteServer({
       server: { middlewareMode: true, host: '0.0.0.0' },
       appType: 'spa'

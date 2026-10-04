@@ -31,6 +31,7 @@ import { RechercheModule } from './components/RechercheModule';
 import { ParametresModule } from './components/ParametresModule';
 import { SyncModal } from './components/SyncModal';
 import { LoginScreen } from './components/LoginScreen';
+import { PWAInstallBanner } from './components/PWAInstallBanner';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -592,6 +593,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
+      <PWAInstallBanner />
       {!isLoggedIn ? (
         <LoginScreen onLogin={handleLogin} />
       ) : (
