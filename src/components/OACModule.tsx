@@ -7,7 +7,7 @@ interface OACModuleProps {
   oacList: OAC[];
   soumissions: SoumissionEnAttente[];
   onAddOAC: (oac: OAC) => void;
-  onUpdateOAC: (oac: OAC) => void;
+  onUpdateOAC: (oac: OAC, subAction?: 'commander' | 'mirer' | 'eclore') => void;
   onDeleteOAC: (id: string) => void;
   onAddSoumission: (soumission: SoumissionEnAttente) => void;
   onApproveSoumission: (idSoumission: string, idChoisi: string, donneesModifiees?: any) => void;
@@ -328,7 +328,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
             cubes,
             eclosion: eclosionDate,
           };
-          onUpdateOAC(updated);
+          onUpdateOAC(updated, 'commander');
           showNotification('Commande modifiée avec succès.', true);
           razC();
         }
@@ -424,7 +424,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
           clairs: clairsNum,
           fertiles,
         };
-        onUpdateOAC(updated);
+        onUpdateOAC(updated, 'mirer');
         showNotification('Données de mirage enregistrées directement dans la base.', true);
         razM();
       }
@@ -510,7 +510,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
           morts: morNum,
           pourVente,
         };
-        onUpdateOAC(updated);
+        onUpdateOAC(updated, 'eclore');
         showNotification("Données d'éclosion enregistrées directement dans la base.", true);
         razE();
       }
@@ -548,7 +548,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
     } else if (deleteType === 'mirage') {
       const existing = oacList.find((x) => x.id === deleteTargetId);
       if (existing) {
-        onUpdateOAC({ ...existing, clairs: null, fertiles: existing.cubes });
+        onUpdateOAC({ ...existing, clairs: 0, fertiles: existing.cubes }, 'mirer');
         showNotification('Données de mirage supprimées avec succès.', true);
         razM();
       }
@@ -557,12 +557,12 @@ export const OACModule: React.FC<OACModuleProps> = ({
       if (existing) {
         onUpdateOAC({
           ...existing,
-          commerciaux: null,
-          nes: null,
-          handicapes: null,
-          morts: null,
-          pourVente: null,
-        });
+          commerciaux: 0,
+          nes: 0,
+          handicapes: 0,
+          morts: 0,
+          pourVente: 0,
+        }, 'eclore');
         showNotification("Données d'éclosion supprimées avec succès.", true);
         razE();
       }

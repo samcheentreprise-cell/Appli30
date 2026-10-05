@@ -297,7 +297,8 @@ async function _handleOacPush(
 ): Promise<SyncResult> {
   // ── INSERT = nouvelle commande ──
   if (crudAction === 'insert') {
-    return _oacCommander(item);
+    const { ligne, ...rest } = item;
+    return _oacCommander(rest);   // laisse GAS ajouter la ligne
   }
 
   // ── UPDATE ──
@@ -307,13 +308,17 @@ async function _handleOacPush(
     if (subAction === 'eclore') return _oacEclore(item);
     if (subAction === 'commander') return _oacCommander(item);
 
-    // 2) Détection automatique :
-    //    - Si "complet === true" → éclosion (le flag complet n'est mis QUE par l'éclosion)
-    //    - Sinon si "clairs" a changé (non null) → mirage
-    //    - Sinon → update générique (commande)
-    if (item.complet === true) {
-      return _oacEclore(item);
-    }
+    // 2) Détection automatique robuste
+    if (item.complet === true) return _oacEclore(item);
+
+    const hasEclosionFields =
+      (item.commerciaux ?? null) !== null ||
+      (item.nes ?? null) !== null ||
+      (item.handicapes ?? null) !== null ||
+      (item.morts ?? null) !== null ||
+      (item.pourVente ?? null) !== null;
+    if (hasEclosionFields) return _oacEclore(item);   // ✅ éclosion détectée AVANT mirage
+
     if (item.clairs !== undefined && item.clairs !== null && item.clairs !== '') {
       return _oacMirer(item);
     }

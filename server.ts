@@ -130,37 +130,22 @@ app.get('/api/gas', async (req, res) => {
 });
 
 app.post('/api/gas', async (req, res) => {
-  const { action, data } = req.body || {};
-
-  if (!action) {
-    return res.status(400).json({ error: 'Action manquante dans le body' });
-  }
-
+  const { action, data, _gas_url, _gas_token } = req.body || {};
+  if (!action) return res.status(400).json({ error: 'Action manquante dans le body' });
   try {
-    const params = new URLSearchParams({
-      action,
-      token: SHEET_TOKEN,
+    const targetUrl = (typeof _gas_url === 'string' && _gas_url.trim()) ? _gas_url.trim() : SHEET_URL;
+    const token     = (typeof _gas_token === 'string' && _gas_token.trim()) ? _gas_token.trim() : SHEET_TOKEN;
+    const params = new URLSearchParams({ action, token });
+    const url = `${targetUrl}?${params.toString()}`;
+    const response = await axios.post(url, JSON.stringify({ data: data || {} }), {
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      maxRedirects: 5,
+      timeout: 30000,
     });
-    const url = `${SHEET_URL}?${params.toString()}`;
-
-    // On utilise text/plain pour éviter le preflight côté serveur→GAS
-    const response = await axios.post(
-      url,
-      JSON.stringify({ data: data || {} }),
-      {
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        maxRedirects: 5,
-        timeout: 30000,
-      }
-    );
-
     res.json(response.data);
   } catch (error: any) {
     console.error('[GAS PROXY POST ERROR]', error?.response?.status, error?.message);
-    res.status(502).json({
-      success: false,
-      error: error?.message || 'Erreur proxy GAS (POST)',
-    });
+    res.status(502).json({ success: false, error: error?.message || 'Erreur proxy GAS (POST)' });
   }
 });
 

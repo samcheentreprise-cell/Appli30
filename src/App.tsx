@@ -145,9 +145,12 @@ export default function App() {
     }
   };
 
-  const handleUpdateOAC = async (updated: OAC) => {
+  const handleUpdateOAC = async (
+    updated: OAC,
+    subAction?: 'commander' | 'mirer' | 'eclore'
+  ) => {
     setOacList((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-    const res = await syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
+    const res = await syncPushToGoogleSheets({ type: 'oac', action: 'update', subAction, item: updated });
     if (res.success) {
       handleTriggerSync();
     }
@@ -586,7 +589,7 @@ export default function App() {
       if (result.parsedData.bordereaux !== undefined) {
         setBordereaux(result.parsedData.bordereaux);
       }
-      if (result.parsedData.soumissions !== undefined) {
+      if (result.parsedData.soumissions !== undefined && result.parsedData.soumissions.length > 0) {
         setSoumissions(result.parsedData.soumissions);
       }
     }
