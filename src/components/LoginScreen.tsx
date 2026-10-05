@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserRole } from '../types';
-import { authenticateUser } from '../data/users';
+import { api } from '../services/googleSheet';
 
 interface LoginScreenProps {
   onLogin: (user: {username: string, role: UserRole}) => void;
@@ -17,15 +17,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     setLoading(true);
     setError('');
     
-    // Simuler un léger délai réseau
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    const user = authenticateUser(username, password);
-    
-    if (user) {
-      onLogin({username: user.username, role: user.role as UserRole});
-    } else {
-      setError('Identifiant ou mot de passe incorrect');
+    try {
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        onLogin({username: data.username, role: data.role as UserRole});
+      } else {
+        setError(data.error || 'Identifiant ou mot de passe incorrect');
+      }
+    } catch (err) {
+      console.error('Auth error:', err);
+      setError('Erreur de connexion au serveur');
+    } finally {
       setLoading(false);
     }
   };
@@ -40,40 +48,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
         <h3 className="text-lg font-semibold text-slate-700 mb-1">Connexion</h3>
         <p className="text-sm text-slate-500 mb-8">Accedez a votre espace de gestion</p>
         
-        <form onSubmit={handleLogin} className="w-full">
-          <div className="mb-4">
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">NOM D'UTILISATEUR</label>
-            <input 
-              type="text" 
-              value={username} 
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Votre identifiant"
-            />
-          </div>
-          
-          <div className="mb-6">
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">MOT DE PASSE</label>
-            <input 
-              type="password" 
-              value={password} 
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Votre mot de passe"
-              autoComplete="current-password"
-            />
-          </div>
-          
-          {error && <p className="text-red-500 text-xs mb-4 text-center">{error}</p>}
-          
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 transition mb-4 disabled:bg-slate-400"
-          >
-            {loading ? 'Connexion...' : 'Se connecter'}
-          </button>
-        </form>
+        {loading ? (
+          <p className="text-sm text-slate-500">Chargement...</p>
+        ) : (
+          <form onSubmit={handleLogin} className="w-full">
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">NOM D'UTILISATEUR</label>
+              <input 
+                type="text" 
+                value={username} 
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Votre identifiant"
+              />
+            </div>
+            
+            <div className="mb-6">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">MOT DE PASSE</label>
+              <input 
+                type="password" 
+                value={password} 
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Votre mot de passe"
+                autoComplete="current-password"
+              />
+            </div>
+            
+            {error && <p className="text-red-500 text-xs mb-4 text-center">{error}</p>}
+            
+            <button 
+              type="submit" 
+              className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 transition mb-4"
+            >
+              Se connecter
+            </button>
+          </form>
+        )}
         
         <div className="flex justify-center w-full">
           <button 

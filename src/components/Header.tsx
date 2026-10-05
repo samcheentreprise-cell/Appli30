@@ -108,7 +108,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex items-center gap-1 overflow-x-auto py-2 border-t border-sky-800/30 scrollbar-none text-sm">
+        <div className="flex flex-wrap items-center gap-1 py-2 border-t border-sky-800/30 text-sm">
           {navItems
             .filter((item) => item.roles.includes(currentRole))
             .map((item) => {
@@ -117,7 +117,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl font-semibold whitespace-nowrap transition-all ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-semibold whitespace-nowrap transition-all ${
                     isActive
                       ? 'bg-amber-500 text-slate-950 shadow-md font-bold'
                       : 'text-sky-100/90 hover:bg-sky-800/50 hover:text-white'

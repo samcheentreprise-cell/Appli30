@@ -162,7 +162,7 @@ export default function App() {
   };
 
   // Admin validation handlers
-  const handleApproveSoumission = (idSoumission: string, idChoisi: string, modifiedDonnees?: any) => {
+  const handleApproveSoumission = async (idSoumission: string, idChoisi: string, modifiedDonnees?: any) => {
     const target = soumissions.find((s) => s.idSoumission === idSoumission);
     if (!target) return;
 
@@ -187,31 +187,16 @@ export default function App() {
       updatedResume = `Commande ${d.type || 'Chairs'} (${d.race || 'Ross 308'}) - ${d.cartons || 0} cartons (${d.fournisseur || ''})`;
     }
 
+    // 1. Marquer la soumission comme "Approuvée" localement
     setSoumissions((prev) =>
       prev.map((s) =>
         s.idSoumission === idSoumission
-          ? {
-              ...s,
-              statut: 'Approuvé',
-              validPar: currentRole === 'admin' ? 'Administrateur' : currentRole,
-              dateValid: todayStr,
-              resume: updatedResume,
-              donnees: d,
-            }
+          ? { ...s, statut: 'Approuvé', resume: updatedResume, idChoisi }
           : s
       )
     );
 
-    // Sync approval to Google Sheets
-    syncPushToGoogleSheets({ 
-      type: 'en_attente', 
-      action: 'update', 
-      item: { idSoumission, statut: 'Approuvé', validPar: 'Administrateur', dateValid: todayStr, resume: updatedResume } 
-    });
-
-    playAlertSound('success');
-
-    // 1. If it's a Commande, insert it into real OAC list!
+    // 2. Si Commande → insérer une nouvelle OAC
     if (target.type === 'Commande') {
       const dateParts = (d.date || '').split('-');
       const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : todayStr;
@@ -242,12 +227,15 @@ export default function App() {
       };
 
       setOacList((prev) => [newOrder, ...prev]);
-      syncPushToGoogleSheets({ type: 'oac', action: 'insert', item: newOrder });
+      // ✅ AWAIT — attendre que l'écriture soit confirmée
+      const res = await syncPushToGoogleSheets({ type: 'oac', action: 'insert', item: newOrder });
+      console.log('[Commande] sync result:', res);
+      if (res.success) await handleTriggerSync();
     }
 
-    // 2. If it's a Mirage, update clairs and fertiles on existing OAC!
+    // 3. Si Mirage → mettre à jour l'OAC existante
     if (target.type === 'Mirage') {
-      const targetId = d.id || (target.donnees && target.donnees.id);
+      const targetId = d.id || target.donnees?.id;
       const existing = oacList.find((x) => x.id === targetId);
       if (existing) {
         const cubes = existing.cubes || ((existing.cartons || 0) * 360 - (existing.nbCasses || 0));
@@ -258,12 +246,32 @@ export default function App() {
           clairs: clairsNum,
           fertiles: fertilesNum,
         };
+
+        // Optimistic update : on affiche tout de suite
         setOacList((prev) => prev.map((x) => (x.id === targetId ? updated : x)));
-        syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
+
+        // ✅ AWAIT le push vers GAS avec subAction explicite
+        const res = await syncPushToGoogleSheets({
+          type: 'oac',
+          action: 'update',
+          subAction: 'mirer',
+          item: updated,
+        });
+        console.log('[Mirage] sync result:', res);
+
+        if (res.success) {
+          // ✅ Recharger SEULEMENT si l'écriture a réussi
+          await handleTriggerSync();
+        } else {
+          // ❌ En cas d'échec, on garde au moins l'UI locale et on logge
+          console.error('[Mirage] écriture échouée :', res.message);
+          // Optionnel : alerte utilisateur
+          // alert('Échec du mirage : ' + res.message);
+        }
       }
     }
 
-    // 3. If it's an Éclosion, update chicks metrics on existing OAC!
+    // 4. Si Éclosion → mettre à jour l'OAC existante
     if (target.type === 'Éclosion') {
       const targetId = d.id || (target.donnees && target.donnees.id);
       const existing = oacList.find((x) => x.id === targetId);
@@ -282,10 +290,31 @@ export default function App() {
           pourVente: pourVenteNum,
           complet: true,
         };
+
+        // Optimistic update
         setOacList((prev) => prev.map((x) => (x.id === targetId ? updated : x)));
-        syncPushToGoogleSheets({ type: 'oac', action: 'update', item: updated });
+
+        // ✅ AWAIT le push vers GAS avec subAction EXPLICITE
+        const res = await syncPushToGoogleSheets({
+          type: 'oac',
+          action: 'update',
+          subAction: 'eclore',          // ← 🔑 EXPCLICITE
+          item: updated,
+        });
+        console.log('[Éclosion] sync result:', res);
+
+        if (res.success) {
+          // ✅ Recharger SEULEMENT après succès
+          await handleTriggerSync();
+        } else {
+          console.error('[Éclosion] écriture échouée :', res.message);
+          // Optionnel : alert('Échec de l\'éclosion : ' + res.message);
+        }
       }
     }
+
+    // 5. Mettre à jour la soumission dans la sheet
+    syncPushToGoogleSheets({ type: 'en_attente', action: 'update', item: { ...target, statut: 'Approuvé', idChoisi } });
   };
 
   const handleRejectSoumission = (idSoumission: string, raison: string) => {

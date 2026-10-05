@@ -1,37 +1,23 @@
-import { 
-  OAC, 
-  CommandePoussin, 
-  Client, 
-  Facture, 
-  Depense, 
-  Vente, 
-  MouvementCaisse, 
-  Bordereau, 
-  SoumissionEnAttente 
-} from '../types';
-
-export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbxx29xyOv788OteXrmly5c2VgOgT6nzyZv6uyVYtU5yXaUnhkj6WIcHykV9L9VkJ40/exec';
+export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzdSJH0MVF3KFaZnMy9zJstg3fLbcJQpeWSUs72w4EnVsLM_Z0HnEHRlMI_6Lbx6X4L/exec';
 export const DEFAULT_API_TOKEN = 'samche_2023_1972KlaBgni2';
+
+export interface SyncResult {
+  success: boolean;
+  message: string;
+  parsedData?: any;
+  timestamp?: string;
+  sourceName?: string;
+}
 
 export function getGSheetWebappUrl(): string {
   const storedUrl = localStorage.getItem('gsheet_webapp_url');
-  if (storedUrl && (storedUrl.includes('AKfycbx5SOLLsYoFPLj') || storedUrl.includes('AKfycbwZLonbfs4JZLy'))) {
-    localStorage.setItem('gsheet_webapp_url', DEFAULT_API_URL);
-    return DEFAULT_API_URL;
-  }
   return storedUrl || (import.meta as any).env?.VITE_GSHEET_WEBAPP_URL || DEFAULT_API_URL;
 }
 
 export function setGSheetWebappUrl(url: string): void {
   const cleanUrl = url ? url.trim() : '';
-  if (!cleanUrl) {
-    localStorage.removeItem('gsheet_webapp_url');
-  } else {
-    localStorage.setItem('gsheet_webapp_url', cleanUrl);
-  }
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('gsheet_url_changed', { detail: { url: cleanUrl } }));
-  }
+  if (!cleanUrl) localStorage.removeItem('gsheet_webapp_url');
+  else localStorage.setItem('gsheet_webapp_url', cleanUrl);
 }
 
 export function getGSheetApiToken(): string {
@@ -41,719 +27,384 @@ export function getGSheetApiToken(): string {
 
 export function setGSheetApiToken(token: string): void {
   const cleanToken = token ? token.trim() : '';
-  if (!cleanToken) {
-    localStorage.removeItem('gsheet_api_token');
-  } else {
-    localStorage.setItem('gsheet_api_token', cleanToken);
-  }
+  if (!cleanToken) localStorage.removeItem('gsheet_api_token');
+  else localStorage.setItem('gsheet_api_token', cleanToken);
 }
 
-export type HtmlErrorCategory = 
-  | 'google_auth' 
-  | 'gas_runtime_error' 
-  | 'proxy_spa_fallback' 
-  | 'redirect_loop' 
-  | 'http_error' 
-  | 'unknown_html';
+// ============================================================
+//  Actions en lecture seule (GET)
+// ============================================================
+const GET_ACTIONS = new Set([
+  'dashboard.data', 'api.ping', 'api.help', 'api.diagnostic',
+  'caisse.solde', 'caisse.stats',
+  'depenses.categories', 'depenses.sousCategories', 'depenses.modesPaiement',
+  'depenses.comptes', 'depenses.genererIdOAC', 'depenses.idsNonLivres',
+  'ventes.produits', 'ventes.produitsPrix', 'ventes.clients',
+  'commandePoussins.previsions', 'commandePoussins.clients', 'commandePoussins.typeProduit',
+  'commandePoussins.prixUnitaire',
+  'factures.statistiques', 'factures.genererNum',
+  'bordereaux.genererNum',
+  'rapport.donneesSemaine', 'rapport.donneesMois', 'rapport.dernierEnvoi',
+  'recherches.toutesVentes', 'recherches.toutesDepenses', 'recherches.filtresRef',
+]);
 
-export interface SyncResult {
-  success: boolean;
-  message: string;
-  data?: any;
-  parsedData?: ParsedSheetsData;
-  timestamp: string;
-  isHtmlError?: boolean;
-  errorCategory?: HtmlErrorCategory;
-  errorTitle?: string;
-  errorDetails?: string;
-  suggestedAction?: string;
-  htmlPreview?: string;
-  statusCode?: number;
+function isGetAction(action: string): boolean {
+  if (GET_ACTIONS.has(action)) return true;
+  if (action.endsWith('.lister')) return true;
+  return false;
 }
 
-export interface ParsedSheetsData {
-  commandesPoussins?: CommandePoussin[];
-  clients?: Client[];
-  factures?: Facture[];
-  oacList?: OAC[];
-  depenses?: Depense[];
-  ventes?: Vente[];
-  mouvementsCaisse?: MouvementCaisse[];
-  bordereaux?: Bordereau[];
-  soumissions?: SoumissionEnAttente[];
-  categoriesDepenses?: string[];
-  produitsPrix?: { nom: string; prix: number }[];
-  clientsNoms?: string[];
-}
-
-function formatDateFr(val: any): string {
-  if (!val) return '';
-  if (typeof val === 'string' && val.includes('T')) {
-    const d = new Date(val);
-    if (!isNaN(d.getTime())) {
-      const day = String(d.getDate()).padStart(2, '0');
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const year = d.getFullYear();
-      return `${day}/${month}/${year}`;
-    }
-  }
-  if (typeof val === 'string' && val.includes('GMT')) {
-    const d = new Date(val);
-    if (!isNaN(d.getTime())) {
-      const day = String(d.getDate()).padStart(2, '0');
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const year = d.getFullYear();
-      return `${day}/${month}/${year}`;
-    }
-  }
-  return String(val);
-}
-
-/**
- * Appel principal de l'API JSON Couvoir Samche
- */
-export async function callApi(action: string, data: any = {}): Promise<any> {
-  const apiUrl = getGSheetWebappUrl();
-  const apiToken = getGSheetApiToken();
-
-  const body = {
-    action,
-    token: apiToken,
-    data
-  };
+// ============================================================
+//  callApi : GET pour lecture, POST pour écriture
+//  + support explicite de method 'POST' / 'GET' en 3e arg
+// ============================================================
+export async function callApi(
+  action: string,
+  data: Record<string, any> = {},
+  method?: 'GET' | 'POST'
+): Promise<any> {
+  const useGet = method ? method === 'GET' : isGetAction(action);
 
   try {
-    const proxyUrl = `/api/proxy?url=${encodeURIComponent(apiUrl)}`;
-    const response = await fetch(proxyUrl, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
+    const apiUrl = getGSheetWebappUrl();
+    const apiToken = getGSheetApiToken();
 
-    const contentType = response.headers.get('content-type') || '';
-    if (!response.ok || !contentType.toLowerCase().includes('application/json')) {
-      const rawText = await response.text();
-      return { success: false, code: 'HTTP_' + response.status, error: rawText.slice(0, 300) };
+    if (useGet) {
+      const params = new URLSearchParams({ action });
+      for (const [key, value] of Object.entries(data)) {
+        if (value === undefined || value === null) continue;
+        if (typeof value === 'object') params.set(key, JSON.stringify(value));
+        else params.set(key, String(value));
+      }
+      if (apiUrl)   params.set('_gas_url', apiUrl);
+      if (apiToken) params.set('_gas_token', apiToken);
+
+      const response = await fetch(`/api/gas?${params.toString()}`, { method: 'GET' });
+      if (!response.ok) {
+        const text = await response.text();
+        return { success: false, error: `HTTP ${response.status}: ${text}` };
+      }
+      return await response.json();
     }
 
+    // POST : body JSON avec action + data + url/token personnalisés
+    const response = await fetch(`/api/gas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action,
+        data,
+        _gas_url: apiUrl,
+        _gas_token: apiToken,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      return { success: false, error: `HTTP ${response.status}: ${text}` };
+    }
     return await response.json();
   } catch (err: any) {
-    return { success: false, code: 'NETWORK', error: err.message };
+    return { success: false, error: err.message };
   }
 }
 
-export async function ping(): Promise<any> {
-  const apiUrl = getGSheetWebappUrl();
-  const targetUrl = `${apiUrl}?action=api.ping`;
-  try {
-    const response = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}`);
-    return await response.json();
-  } catch (e: any) {
-    return { success: false, error: e.message };
-  }
-}
+export async function ping(): Promise<any> { return callApi('api.ping'); }
+export async function help(): Promise<any> { return callApi('api.help'); }
 
-export async function help(): Promise<any> {
-  const apiUrl = getGSheetWebappUrl();
-  const targetUrl = `${apiUrl}?action=api.help`;
-  try {
-    const response = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}`);
-    return await response.json();
-  } catch (e: any) {
-    return { success: false, error: e.message };
-  }
-}
-
-/**
- * Client API unifié Couvoir Samche
- */
-export const api = {
-  ping,
-  help,
-
-  // -- Dashboard --
-  async dashboard() {
-    return callApi('dashboard.data');
-  },
-
-  // -- OAC --
-  async listerOAC(filtre: string = 'tous', limite: number = 200) {
-    return callApi('oac.lister', { filtre, limite });
-  },
-  async commanderOAC(data: any) {
-    return callApi('oac.commander', data);
-  },
-  async mirerOAC(idCommande: string, clairs: number) {
-    return callApi('oac.mirer', { idCommande, clairs });
-  },
-  async ecloreOAC(idCommande: string, commercial: number, morts: number = 0, handicapes: number = 0) {
-    return callApi('oac.eclore', { idCommande, commercial, morts, handicapes });
-  },
-
-  // -- Dépenses --
-  async listerDepenses(limite: number = 200) {
-    return callApi('depenses.lister', { limite });
-  },
-  async enregistrerDepense(data: any) {
-    return callApi('depenses.enregistrer', data);
-  },
-  async supprimerDepense(ligne: number) {
-    return callApi('depenses.supprimer', { ligne });
-  },
-  async categoriesDepenses() {
-    return callApi('depenses.categories');
-  },
-  async sousCategoriesDepenses(categorie?: string) {
-    return callApi('depenses.sousCategories', { categorie });
-  },
-  async genererIdOAC() {
-    return callApi('depenses.genererIdOAC');
-  },
-  async idsOACNonLivres() {
-    return callApi('depenses.idsNonLivres');
-  },
-
-  // -- Ventes --
-  async listerVentes(limite: number = 200) {
-    return callApi('ventes.lister', { limite });
-  },
-  async enregistrerVente(data: any) {
-    return callApi('ventes.enregistrer', data);
-  },
-  async supprimerVente(ligne: number) {
-    return callApi('ventes.supprimer', { ligne });
-  },
-  async produits() {
-    return callApi('ventes.produits');
-  },
-  async produitsPrix() {
-    return callApi('ventes.produitsPrix');
-  },
-  async clients() {
-    return callApi('ventes.clients');
-  },
-  async ajouterClient(data: any) {
-    return callApi('ventes.ajouterClient', data);
-  },
-
-  // -- Caisse --
-  async listerCaisse(limite: number = 200) {
-    return callApi('caisse.lister', { limite });
-  },
-  async soldeCaisse() {
-    return callApi('caisse.solde');
-  },
-  async statsCaisse() {
-    return callApi('caisse.stats');
-  },
-  async enregistrerCaisse(data: any) {
-    return callApi('caisse.enregistrer', data);
-  },
-  async supprimerCaisse(ligne: number) {
-    return callApi('caisse.supprimer', { ligne });
-  },
-
-  // -- Commande Poussins --
-  async listerCommandesPoussins() {
-    return callApi('commandePoussins.lister');
-  },
-  async enregistrerCommandePoussin(data: any) {
-    return callApi('commandePoussins.enregistrer', data);
-  },
-  async modifierCommandePoussin(rowIndex: number, quantite: number, statut: string, notes?: string) {
-    return callApi('commandePoussins.modifier', { rowIndex, quantite, statut, notes });
-  },
-  async supprimerCommandePoussin(rowIndex: number, idCommande?: string) {
-    return callApi('commandePoussins.supprimer', { rowIndex, idCommande });
-  },
-  async previsionsPoussins() {
-    return callApi('commandePoussins.previsions');
-  },
-  async typeProduitActif() {
-    return callApi('commandePoussins.typeProduit');
-  },
-  async prixUnitaire(typeProduit: string) {
-    return callApi('commandePoussins.prixUnitaire', { typeProduit });
-  },
-
-  // -- Factures --
-  async listerFactures(limite: number = 200) {
-    return callApi('factures.lister', { limite });
-  },
-  async enregistrerFacture(data: any) {
-    return callApi('factures.enregistrer', data);
-  },
-
-  // -- Bordereaux --
-  async listerBordereaux(limite: number = 200) {
-    return callApi('bordereaux.lister', { limite });
-  },
-  async enregistrerBordereau(data: any) {
-    return callApi('bordereaux.enregistrer', data);
-  },
-
-  // -- Clients --
-  async listerClients() {
-    return callApi('clients.lister');
-  },
-  async listerUtilisateurs() {
-    return callApi('utilisateurs.lister');
-  },
-  async authentifier(data: any) {
-    return callApi('utilisateurs.authentifier', data);
-  }
-};
-
-/**
- * Synchronisation descendante (Lecture) depuis l'API Google Apps Script
- */
-export async function fetchGoogleSheetsData(retries: number = 1): Promise<SyncResult> {
-  const now = new Date().toLocaleTimeString('fr-FR');
+// ============================================================
+//  Synchronisation : lit toutes les listes en parallèle
+// ============================================================
+export async function fetchGoogleSheetsData(): Promise<SyncResult> {
   try {
     const [
-      oacRes,
-      poussinsRes,
-      ventesRes,
-      depensesRes,
-      caisseRes,
-      facturesRes,
-      bordereauxRes,
-      clientsRes,
-      prodPrixRes,
-      categoriesRes,
-      clientsNomsRes
+      oacRes, ventesRes, depensesRes, caisseRes,
+      clientsRes, facturesRes, cmdPoussinsRes, bordereauxRes
     ] = await Promise.all([
-      api.listerOAC('tous', 200),
-      api.listerCommandesPoussins(),
-      api.listerVentes(200),
-      api.listerDepenses(200),
-      api.listerCaisse(200),
-      api.listerFactures(200),
-      api.listerBordereaux(200),
-      api.listerClients(),
-      api.produitsPrix(),
-      api.categoriesDepenses(),
-      api.clients()
+      callApi('oac.lister'),
+      callApi('ventes.lister'),
+      callApi('depenses.lister'),
+      callApi('caisse.lister'),
+      callApi('clients.lister'),
+      callApi('factures.lister'),
+      callApi('commandePoussins.lister'),
+      callApi('bordereaux.lister'),
     ]);
 
-    const parsedData: ParsedSheetsData = {};
-
-    // 0. Metadata options from Sheet
-    if (prodPrixRes?.success && Array.isArray(prodPrixRes.data)) {
-      parsedData.produitsPrix = prodPrixRes.data;
-    }
-    if (categoriesRes?.success && Array.isArray(categoriesRes.data)) {
-      parsedData.categoriesDepenses = categoriesRes.data;
-    }
-    if (clientsNomsRes?.success && Array.isArray(clientsNomsRes.data)) {
-      parsedData.clientsNoms = clientsNomsRes.data;
+    const failed = [oacRes, ventesRes, depensesRes, caisseRes, clientsRes, facturesRes, cmdPoussinsRes, bordereauxRes]
+      .find(r => !r?.success);
+    if (failed) {
+      return {
+        success: false,
+        message: failed.error || failed.data?.error || 'Une action GAS a échoué',
+      };
     }
 
-    // 1. OAC
-    if (oacRes?.success && Array.isArray(oacRes?.data?.commandes)) {
-      parsedData.oacList = oacRes.data.commandes.map((c: any) => {
-        let dateVal = String(c.date || c.dateCommande || c.dateCmd || '').trim();
-        const ecloStr = String(c.dateEclosion || c.eclosion || '').trim();
-        if ((!dateVal || dateVal === '--') && ecloStr) {
-          const parts = ecloStr.split('/');
-          if (parts.length === 3) {
-            const dt = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-            if (!isNaN(dt.getTime())) {
-              dt.setDate(dt.getDate() - 21);
-              dateVal = `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
-            }
-          }
-        }
-        return {
-          ligne: c.ligne,
-          id: String(c.id || ''),
-          date: dateVal,
-          type: String(c.type || 'Chairs'),
-          race: String(c.race || ''),
-          fournisseur: String(c.fournisseur || ''),
-          cartons: Number(c.cartons) || 0,
-          recus: Number(c.recus) || 0,
-          nbCasses: Number(c.casses) || 0,
-          cubes: Number(c.cubes) || 0,
-          eclosion: ecloStr,
-          clairs: c.clairs != null ? Number(c.clairs) : null,
-          fertiles: c.fertiles != null ? Number(c.fertiles) : null,
-          attendus: c.attendus != null ? Number(c.attendus) : null,
-          commerciaux: c.poussins != null ? Number(c.poussins) : null,
-          morts: c.morts != null ? Number(c.morts) : null,
-          handicapes: c.handicapes != null ? Number(c.handicapes) : null,
-          pourVente: c.pourVente != null ? Number(c.pourVente) : null,
-          complet: c.statut === 'Eclos'
-        };
-      });
-    } else {
-      parsedData.oacList = [];
-    }
+    // Mapping OAC : transforme les champs GAS → React
+    // Supporte { commandes: [...] } ou directement [...]
+    const rawOacData = oacRes.data?.commandes || (Array.isArray(oacRes.data) ? oacRes.data : []);
+    const oacList = rawOacData.map((o: any) => ({
+      _v: 25,
+      ligne: o.ligne,
+      id: o.id,
+      date: o.dateCmd || o.date || '',
+      type: o.type,
+      race: o.race,
+      fournisseur: o.fournisseur,
+      cartons: o.cartons,
+      recus: o.recus,
+      nbCasses: o.casses ?? o.nbCasses ?? 0,
+      cubes: o.cubes ?? ((o.cartons || 0) * 360 - (o.casses || 0)),
+      eclosion: o.dateEclosion || o.eclosion || '',
+      clairs: o.clairs ?? null,
+      fertiles: o.fertiles ?? o.cubes ?? 0,
+      commerciaux: o.poussins ?? null,
+      nes: o.poussins ?? null,
+      pourVente: o.pourVente ?? null,
+      handicapes: o.handicapes ?? null,
+      morts: o.morts ?? null,
+      complet: o.statut === 'Éclos' || o.statut === 'Terminé',
+      attendus: o.attendus,
+      tauxEclosion: o.tauxEclosion,
+      tauxIncubation: o.tauxIncubation,
+      statut: o.statut,
+    }));
 
-    // 2. Commandes Poussins
-    if (poussinsRes?.success && Array.isArray(poussinsRes.data)) {
-      parsedData.commandesPoussins = poussinsRes.data.map((p: any) => ({
-        id: String(p.id || ''),
-        date: formatDateFr(p.date),
-        prenom: String(p.prenom || ''),
-        nom: String(p.nom || ''),
-        email: p.email || undefined,
-        tel: p.tel || undefined,
-        typeProduit: String(p.type || 'Chairs'),
-        dateEclosion: formatDateFr(p.eclosion),
-        quantite: Number(p.quantite) || 0,
-        prixUnitaire: Number(p.prix) || 0,
-        total: Number(p.total) || 0,
-        statut: (p.statut || 'En attente') as any,
-        notes: p.notes || undefined
-      }));
-    } else {
-      parsedData.commandesPoussins = [];
-    }
-
-    // 3. Ventes
-    if (ventesRes?.success && Array.isArray(ventesRes?.data?.ventes)) {
-      parsedData.ventes = ventesRes.data.ventes.map((v: any) => {
-        const qte = Number(v.quantite) || 0;
-        const pu = Number(v.prixUnitaire ?? v.pu ?? v.prix) || 0;
-        const calcMontant = qte * pu;
-        const mt = (v.montant !== undefined && v.montant !== null && v.montant !== '' && Number(v.montant) > 0)
-          ? Number(v.montant)
-          : (Number(v.montantTotal || v.montantPaye) || calcMontant);
-
-        const av = (v.avance !== undefined && v.avance !== null && v.avance !== '' && Number(v.avance) > 0)
-          ? Number(v.avance)
-          : (Number(v.montantPaye) || (v.statutPaiement === 'Payee' ? mt : 0));
-
-        const rel = (v.reliquat !== undefined && v.reliquat !== null && v.reliquat !== '')
-          ? Number(v.reliquat)
-          : Math.max(0, mt - av);
-
-        const typeV = String(v.typeVente || (v.produit === 'Poulet' ? 'Autre produit' : 'Poussins couvoir'));
-
-        return {
-          ligne: v.ligne,
-          date: formatDateFr(v.date),
-          client: String(v.client || ''),
-          produit: String(v.produit || v.nature || v.typeProduit || (typeV === 'Autre produit' ? 'Poulet' : 'Chairs')),
-          quantite: qte,
-          prixUnitaire: pu,
-          montant: mt,
-          typeVente: typeV as any,
-          statutPaiement: (v.statutPaiement || (rel === 0 ? 'Payee' : av > 0 ? 'Avance' : 'Non payee')) as any,
-          avance: av,
-          reliquat: rel,
-          dateEclosion: formatDateFr(v.dateEclosion || v.eclosion),
-          observation: v.observation || v.remarques || v.obs || undefined
-        };
-      });
-    } else {
-      parsedData.ventes = [];
-    }
-
-    // 4. Dépenses
-    if (depensesRes?.success && Array.isArray(depensesRes?.data?.depenses)) {
-      parsedData.depenses = depensesRes.data.depenses.map((d: any) => ({
-        ligne: d.ligne,
-        date: String(d.date || ''),
-        dateMs: d.dateMs,
-        categorie: String(d.categorie || 'Divers'),
-        sousCategorie: String(d.sousCategorie || ''),
-        montant: Number(d.montant) || 0,
-        libelle: String(d.libelle || ''),
-        sourcePaiement: String(d.sourcePaiement || 'Caisse'),
-        numPiece: d.numPiece || undefined,
-        idCommande: d.idCommande || undefined
-      }));
-    } else {
-      parsedData.depenses = [];
-    }
-
-    // 5. Caisse
-    if (caisseRes?.success && Array.isArray(caisseRes?.data?.mouvements)) {
-      parsedData.mouvementsCaisse = caisseRes.data.mouvements.map((m: any) => ({
-        ligne: m.ligne,
-        date: String(m.date || ''),
-        type: String(m.type || 'Mouvement'),
-        detail: m.detail || undefined,
-        entree: Number(m.entree) || 0,
-        sortie: Number(m.sortie) || 0,
-        solde: Number(m.solde) || 0,
-        observation: m.observation || undefined
-      }));
-    } else {
-      parsedData.mouvementsCaisse = [];
-    }
-
-    // 6. Factures
-    if (facturesRes?.success && Array.isArray(facturesRes?.data?.factures)) {
-      parsedData.factures = facturesRes.data.factures.map((f: any) => ({
-        ligne: f.ligne,
-        numero: String(f.numero || ''),
-        date: String(f.date || ''),
-        client: String(f.client || ''),
-        telephone: f.telephone || undefined,
-        ville: f.ville || undefined,
-        refCmd: f.refCmd || undefined,
-        nbArticles: Number(f.nbArticles) || 1,
-        montantHT: Number(f.montantHT) || 0,
-        remisePct: Number(f.remisePct) || 0,
-        remiseVal: Number(f.remiseVal) || 0,
-        tvaPct: Number(f.tvaPct) || 0,
-        tvaVal: Number(f.tvaVal) || 0,
-        total: Number(f.total) || 0,
-        modeReglement: String(f.modeReglement || 'Espèces'),
-        echeance: String(f.echeance || ''),
-        statut: (f.statut || 'Emise') as any,
-        notes: f.notes || undefined
-      }));
-    } else {
-      parsedData.factures = [];
-    }
-
-    // 7. Bordereaux
-    if (bordereauxRes?.success && Array.isArray(bordereauxRes?.data?.bordereaux)) {
-      parsedData.bordereaux = bordereauxRes.data.bordereaux.map((b: any) => ({
-        numero: String(b.numero || ''),
-        date: String(b.date || ''),
-        client: String(b.client || ''),
-        lignes: [{ designation: 'Poussins d’un jour', qte: Number(b.nbArticles) || 0, unite: 'Cartons' }],
-        statut: (b.statut || 'Emis') as any
-      }));
-    } else {
-      parsedData.bordereaux = [];
-    }
-
-    // 8. Clients
-    if (clientsRes?.success && Array.isArray(clientsRes.data)) {
-      parsedData.clients = clientsRes.data.map((cl: any, idx: number) => ({
-        index: cl.index || idx + 1,
-        prenom: String(cl.prenom || ''),
-        nom: String(cl.nom || ''),
-        ville: String(cl.ville || 'Bamako'),
-        telephone: String(cl.telephone || ''),
-        email: cl.email || undefined,
-        label: cl.label || `${cl.prenom || ''} ${cl.nom || ''}`.trim() || 'Client',
-        totalAchats: 0
-      }));
-    } else {
-      parsedData.clients = [];
-    }
+    const parsedData = {
+      oacList,
+      ventes:            ventesRes.data?.ventes         || [],
+      depenses:          depensesRes.data?.depenses     || [],
+      mouvementsCaisse:  caisseRes.data?.mouvements     || [],
+      clients:           Array.isArray(clientsRes.data) ? clientsRes.data : (clientsRes.data?.clients || []),
+      factures:          facturesRes.data?.factures     || [],
+      commandesPoussins: Array.isArray(cmdPoussinsRes.data) ? cmdPoussinsRes.data : (cmdPoussinsRes.data?.commandes || []),
+      bordereaux:        bordereauxRes.data?.bordereaux || [],
+      soumissions:       [],
+    };
 
     return {
       success: true,
-      message: 'Données synchronisées avec succès depuis le Couvoir SAMCHE',
+      message: 'Synchronisation réussie',
       parsedData,
-      timestamp: now
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
     };
   } catch (err: any) {
+    return { success: false, message: err.message || 'Erreur réseau' };
+  }
+}
+
+// ============================================================
+//  Push vers Google Sheets — utilise POST
+// ============================================================
+
+// Mapping des champs React → GAS pour chaque type
+const FIELD_MAP: Record<string, Record<string, string>> = {
+  oac: {
+    nbCasses: 'casses',
+    eclosion: 'eclosion',
+    dateEclosion: 'eclosion',
+    commerciaux: 'commercial',
+    nes: 'commercial',
+    id: 'idCommande',
+  },
+  ventes: {},
+  depenses: {},
+  caisse: {},
+  clients: {},
+  factures: {},
+  commandes_poussins: {},
+  bordereaux: {},
+};
+
+// Mapping type → action GAS (insert/update/delete)
+const ACTION_MAP: Record<string, { insert: string; update: string; delete: string }> = {
+  oac:                { insert: 'oac.commander',            update: 'oac.commander',         delete: 'oac.commander' },
+  ventes:             { insert: 'ventes.enregistrer',       update: 'ventes.enregistrer',    delete: 'ventes.supprimer' },
+  depenses:           { insert: 'depenses.enregistrer',     update: 'depenses.enregistrer',  delete: 'depenses.supprimer' },
+  caisse:             { insert: 'caisse.enregistrer',       update: 'caisse.enregistrer',    delete: 'caisse.supprimer' },
+  clients:            { insert: 'clients.ajouter',          update: 'clients.modifier',      delete: 'clients.supprimer' },
+  factures:           { insert: 'factures.enregistrer',     update: 'factures.modifier',     delete: 'factures.supprimer' },
+  commandes_poussins: { insert: 'commandePoussins.enregistrer', update: 'commandePoussins.modifier', delete: 'commandePoussins.supprimer' },
+  bordereaux:         { insert: 'bordereaux.enregistrer',   update: 'bordereaux.enregistrer', delete: 'bordereaux.supprimer' },
+};
+
+export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> {
+  const { type, action: crudAction, item, subAction } = payload || {};
+
+  if (!type || !item) {
+    return { success: false, message: 'Payload invalide (type ou item manquant)' };
+  }
+
+  const actions = ACTION_MAP[type];
+  if (!actions) {
+    return { success: false, message: `Type inconnu: ${type}` };
+  }
+
+  // ── Cas spécial OAC : 3 actions distinctes ──
+  if (type === 'oac') {
+    return _handleOacPush(crudAction, item, subAction);
+  }
+
+  // ── Cas général ──
+  const gasAction = actions[crudAction as keyof typeof actions];
+  if (!gasAction) {
+    return { success: false, message: `Action "${crudAction}" non supportée pour le type "${type}"` };
+  }
+
+  const fieldMap = FIELD_MAP[type] || {};
+  const data: Record<string, any> = {};
+  for (const [key, value] of Object.entries(item)) {
+    if (value === undefined || value === null) continue;
+    const gasKey = fieldMap[key] || key;
+    data[gasKey] = value;
+  }
+  delete data._v;
+  delete data.complet;
+  delete data.statut;
+
+  // DELETE : envoyer uniquement la clé
+  if (crudAction === 'delete') {
+    const deleteData: Record<string, any> = {};
+    if (item.ligne) deleteData.ligne = item.ligne;
+    else if (item.id) deleteData.id = item.id;
+    else if (item.rowIndex) deleteData.rowIndex = item.rowIndex;
+    else if (item.index) deleteData.ligne = item.index;
+    const result = await callApi(gasAction, deleteData, 'POST');
     return {
-      success: false,
-      message: `Erreur de synchronisation : ${err.message}`,
-      timestamp: now,
-      errorDetails: err.message
+      success: !!result?.success,
+      message: result?.data?.message || result?.error || 'Suppression effectuée',
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
     };
   }
+
+  const result = await callApi(gasAction, data, 'POST');
+  const ok = result?.success && result?.data?.succes !== false;
+  return {
+    success: ok,
+    message: result?.data?.message || result?.error || (ok ? 'Écriture OK' : 'Écriture échouée'),
+    timestamp: new Date().toLocaleTimeString('fr-FR'),
+  };
 }
 
-/**
- * Synchronisation montante (Écriture) vers l'API Google Apps Script
- */
-function toIsoDate(val: any): string {
-  if (!val) return '';
-  const s = String(val).trim();
-  if (s.includes('-')) return s;
-  const parts = s.split('/');
-  if (parts.length === 3) {
-    return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+// ============================================================
+//  Helper : gestion spécifique des 3 actions OAC
+//  - subAction explicite ('commander' | 'mirer' | 'eclore')
+//  - à défaut, détection automatique robuste
+// ============================================================
+async function _handleOacPush(
+  crudAction: string,
+  item: any,
+  subAction?: 'commander' | 'mirer' | 'eclore'
+): Promise<SyncResult> {
+  // ── INSERT = nouvelle commande ──
+  if (crudAction === 'insert') {
+    return _oacCommander(item);
   }
-  return s;
-}
 
-export async function syncPushToGoogleSheets(payload: any, retries: number = 1): Promise<SyncResult> {
-  const now = new Date().toLocaleTimeString('fr-FR');
-  try {
-    let result: any;
-    const { type, action, item } = payload;
+  // ── UPDATE ──
+  if (crudAction === 'update') {
+    // 1) subAction explicite prioritaire
+    if (subAction === 'mirer') return _oacMirer(item);
+    if (subAction === 'eclore') return _oacEclore(item);
+    if (subAction === 'commander') return _oacCommander(item);
 
-    if (type === 'oac') {
-      if (action === 'insert') {
-        const ecloIso = toIsoDate(item.eclosion || item.dateEclosion);
-        const dateIso = toIsoDate(item.date) || item.date;
-        result = await api.commanderOAC({
-          date: dateIso,
-          id: item.id,
-          type: item.type || 'Chairs',
-          race: item.race || '',
-          fournisseur: item.fournisseur || '',
-          cartons: Number(item.cartons) || 1,
-          casses: Number(item.nbCasses || item.casses) || 0,
-          eclosion: ecloIso,
-          dateEclosion: item.eclosion || item.dateEclosion
-        });
-      } else if (action === 'update') {
-        if (item.clairs !== undefined && item.clairs !== null && (item.commerciaux === undefined || item.commerciaux === null)) {
-          result = await api.mirerOAC(item.id, Number(item.clairs) || 0);
-        } else if (item.commerciaux !== undefined || item.morts !== undefined) {
-          result = await api.ecloreOAC(
-            item.id, 
-            Number(item.commerciaux || item.nes) || 0, 
-            Number(item.morts) || 0, 
-            Number(item.handicapes) || 0
-          );
-        } else {
-          result = await api.commanderOAC(item);
-        }
-      }
-    } else if (type === 'ventes') {
-      if (action === 'insert' || action === 'update') {
-        result = await api.enregistrerVente({
-          date: item.date,
-          produit: item.produit || 'Chairs',
-          typeVente: item.typeVente || 'Poussins couvoir',
-          dateEclosion: item.dateEclosion || item.date,
-          client: item.client,
-          telephone: item.telephone || '',
-          quantite: Number(item.quantite) || 0,
-          prixUnitaire: Number(item.prixUnitaire) || 0,
-          montant: Number(item.montant) || 0,
-          montantTotal: Number(item.montant) || 0,
-          montantPaye: Number(item.avance !== undefined ? item.avance : item.montant) || 0,
-          avance: Number(item.avance !== undefined ? item.avance : item.montant) || 0,
-          reliquat: Number(item.reliquat) || 0,
-          statutPaiement: item.statutPaiement || 'Payee',
-          modePaiement: item.modePaiement || 'Espèces',
-          observation: item.observation || '',
-          numFacture: item.numFacture || ''
-        });
-      } else if (action === 'delete') {
-        result = await api.supprimerVente(item.ligne);
-      }
-    } else if (type === 'depenses') {
-      if (action === 'insert' || action === 'update') {
-        result = await api.enregistrerDepense({
-          date: item.date,
-          categorie: item.categorie,
-          sousCategorie: item.sousCategorie,
-          montant: Number(item.montant) || 0,
-          libelle: item.libelle || '',
-          sourcePaiement: item.sourcePaiement || 'Caisse',
-          numPiece: item.numPiece || '',
-          idCommande: item.idCommande || ''
-        });
-      } else if (action === 'delete') {
-        result = await api.supprimerDepense(item.ligne);
-      }
-    } else if (type === 'caisse') {
-      if (action === 'insert' || action === 'update') {
-        result = await api.enregistrerCaisse({
-          date: item.date,
-          type: item.type,
-          detail: item.detail || '',
-          entree: Number(item.entree || 0),
-          sortie: Number(item.sortie || 0),
-          observation: item.observation || ''
-        });
-      } else if (action === 'delete') {
-        result = await api.supprimerCaisse(item.ligne);
-      }
-    } else if (type === 'commandes_poussins') {
-      if (action === 'insert') {
-        result = await api.enregistrerCommandePoussin({
-          date: item.date,
-          prenom: item.prenom || '',
-          nom: item.nom || '',
-          tel: item.tel || '',
-          email: item.email || '',
-          ville: item.ville || 'Bamako',
-          type: item.typeProduit || item.type || 'Chairs',
-          typeProduit: item.typeProduit || item.type || 'Chairs',
-          dateEclosion: item.dateEclosion || item.eclosion,
-          eclosion: item.dateEclosion || item.eclosion,
-          quantite: Number(item.quantite) || 0,
-          prix: Number(item.prixUnitaire || item.prix) || 0,
-          prixUnitaire: Number(item.prixUnitaire || item.prix) || 0,
-          total: Number(item.total) || 0,
-          statut: item.statut || 'En attente',
-          notes: item.notes || ''
-        });
-      } else if (action === 'update') {
-        result = await api.modifierCommandePoussin(
-          item.rowIndex || item.ligne || 2, 
-          Number(item.quantite) || 0, 
-          item.statut, 
-          item.notes
-        );
-      } else if (action === 'delete') {
-        result = await api.supprimerCommandePoussin(item.rowIndex || item.ligne || 2, item.id);
-      }
-    } else if (type === 'factures') {
-      if (action === 'insert' || action === 'update') {
-        result = await api.enregistrerFacture({
-          date: item.date,
-          client: item.client,
-          telephone: item.telephone || '',
-          ville: item.ville || 'Bamako',
-          modeReglement: item.modeReglement || 'Espèces',
-          total: Number(item.total) || 0,
-          lignes: item.lignes && item.lignes.length > 0 ? item.lignes : [
-            { designation: 'Poussins d’un jour', quantite: item.nbArticles || 1, prixUnitaire: Number(item.total) || 0, total: Number(item.total) || 0 }
-          ]
-        });
-      } else if (action === 'delete') {
-        result = await callApi('factures.supprimer', { ligne: item.ligne });
-      }
-    } else if (type === 'bordereaux') {
-      result = await api.enregistrerBordereau(item);
-    } else if (type === 'clients') {
-      if (action === 'insert') {
-        result = await callApi('clients.ajouter', {
-          prenom: item.prenom || '',
-          nom: item.nom || '',
-          ville: item.ville || 'Bamako',
-          telephone: item.telephone || '',
-          email: item.email || ''
-        });
-      } else if (action === 'update') {
-        result = await callApi('clients.modifier', {
-          ligne: item.index || item.ligne,
-          prenom: item.prenom || '',
-          nom: item.nom || '',
-          ville: item.ville || 'Bamako',
-          telephone: item.telephone || '',
-          email: item.email || ''
-        });
-      } else if (action === 'delete') {
-        result = await callApi('clients.supprimer', { ligne: item.index || item.ligne });
-      }
+    // 2) Détection automatique :
+    //    - Si "complet === true" → éclosion (le flag complet n'est mis QUE par l'éclosion)
+    //    - Sinon si "clairs" a changé (non null) → mirage
+    //    - Sinon → update générique (commande)
+    if (item.complet === true) {
+      return _oacEclore(item);
     }
-
-    const isOk = 
-      result?.success === true && 
-      result?.data?.succes !== false && 
-      result?.data?.success !== false;
-
-    const msg = 
-      result?.data?.message || 
-      result?.message || 
-      result?.error || 
-      (isOk ? 'Enregistré avec succès dans Google Sheets' : 'Erreur d\'enregistrement dans le classeur');
-
-    return {
-      success: isOk,
-      message: msg,
-      data: result,
-      timestamp: now
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      message: `Erreur d'envoi : ${err.message}`,
-      timestamp: now,
-      errorDetails: err.message
-    };
+    if (item.clairs !== undefined && item.clairs !== null && item.clairs !== '') {
+      return _oacMirer(item);
+    }
+    return _oacCommander(item);
   }
+
+  // ── DELETE : pas supporté côté GAS ──
+  return {
+    success: false,
+    message: 'Suppression OAC non supportée par GAS. Ajoutez "oac.supprimer" côté Apps Script.',
+  };
 }
+
+// ── Action : oac.commander (insert ou update avec ligne) ──
+async function _oacCommander(item: any): Promise<SyncResult> {
+  const data = {
+    ligne: item.ligne || '',
+    id: item.id || '',
+    date: item.date || '',
+    type: item.type || 'Chairs',
+    race: item.race || 'Ross 308',
+    fournisseur: item.fournisseur || '',
+    cartons: item.cartons || 0,
+    casses: item.nbCasses || 0,
+    eclosion: item.eclosion || item.dateEclosion || '',
+  };
+  // Champs obligatoires côté GAS : cartons > 0 et eclosion non vide
+  if (!data.cartons || data.cartons <= 0) {
+    return { success: false, message: 'Le nombre de cartons est obligatoire et doit être > 0.', timestamp: new Date().toLocaleTimeString('fr-FR') };
+  }
+  if (!data.eclosion) {
+    return { success: false, message: "La date d'éclosion est obligatoire.", timestamp: new Date().toLocaleTimeString('fr-FR') };
+  }
+  const result = await callApi('oac.commander', data, 'POST');
+  const ok = result?.success && result?.data?.succes !== false;
+  return {
+    success: ok,
+    message: result?.data?.message || result?.error || (ok ? 'Commande enregistrée' : 'Échec commande'),
+    timestamp: new Date().toLocaleTimeString('fr-FR'),
+  };
+}
+
+// ── Action : oac.mirer ──
+async function _oacMirer(item: any): Promise<SyncResult> {
+  if (!item.id) {
+    return { success: false, message: 'ID commande manquant pour le mirage.', timestamp: new Date().toLocaleTimeString('fr-FR') };
+  }
+  const data = {
+    id: item.id,
+    clairs: Number(item.clairs) || 0,
+  };
+  const result = await callApi('oac.mirer', data, 'POST');
+  const ok = result?.success && result?.data?.succes !== false;
+  return {
+    success: ok,
+    message: result?.data?.message || result?.error || (ok ? 'Mirage enregistré' : 'Échec mirage'),
+    timestamp: new Date().toLocaleTimeString('fr-FR'),
+  };
+}
+
+// ── Action : oac.eclore ──
+async function _oacEclore(item: any): Promise<SyncResult> {
+  if (!item.id) {
+    return { success: false, message: 'ID commande manquant pour l\'éclosion.', timestamp: new Date().toLocaleTimeString('fr-FR') };
+  }
+  const commNum = Number(item.commerciaux) || 0;
+  if (commNum < 0) {
+    return { success: false, message: 'Le nombre de poussins commerciaux ne peut pas être négatif.', timestamp: new Date().toLocaleTimeString('fr-FR') };
+  }
+  const data = {
+    id: item.id,
+    commercial: commNum,
+    nes: commNum,
+    pourVente: Number(item.pourVente) || commNum,
+    morts: Number(item.morts) || 0,
+    handicapes: Number(item.handicapes) || 0,
+  };
+  const result = await callApi('oac.eclore', data, 'POST');
+  const ok = result?.success && result?.data?.succes !== false;
+  return {
+    success: ok,
+    message: result?.data?.message || result?.error || (ok ? 'Éclosion enregistrée' : 'Échec éclosion'),
+    timestamp: new Date().toLocaleTimeString('fr-FR'),
+  };
+}
+
+export const api = {
+  ping,
+  help,
+  async listerUtilisateurs() { return callApi('utilisateurs.lister'); },
+  async authentifier(data: { username: string; password: string }) {
+    return callApi('utilisateurs.authentifier', data);
+  },
+};
