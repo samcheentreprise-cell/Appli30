@@ -46,6 +46,7 @@ const GET_ACTIONS = new Set([
   'bordereaux.genererNum',
   'rapport.donneesSemaine', 'rapport.donneesMois', 'rapport.dernierEnvoi',
   'recherches.toutesVentes', 'recherches.toutesDepenses', 'recherches.filtresRef',
+  'fparam.get',
 ]);
 
 function isGetAction(action: string): boolean {
@@ -110,6 +111,43 @@ export async function callApi(
 
 export async function ping(): Promise<any> { return callApi('api.ping'); }
 export async function help(): Promise<any> { return callApi('api.help'); }
+
+// Cache global pour les données F-Param
+let _fparamCache: any = null;
+
+export async function getFParamData(force = false): Promise<{
+  produitsPrix: Record<string, number>;
+  sourcesPaiement: string[];
+  typesProduits: string[];
+}> {
+  if (_fparamCache && !force) return _fparamCache;
+  const result = await callApi('fparam.get');
+  if (result?.success && result?.data) {
+    _fparamCache = result.data;
+    return _fparamCache;
+  }
+  return { produitsPrix: {}, sourcesPaiement: [], typesProduits: [] };
+}
+
+// Helper : récupère le prix d'un type de produit (avec fallback)
+export async function getPrixUnitaire(typeProduit: string): Promise<number> {
+  const fp = await getFParamData();
+  const key = (typeProduit || '').trim();
+  // Recherche exacte
+  if (fp.produitsPrix[key] !== undefined) return fp.produitsPrix[key];
+  // Recherche insensible à la casse
+  const lowerKey = key.toLowerCase();
+  for (const k of Object.keys(fp.produitsPrix)) {
+    if (k.toLowerCase() === lowerKey) return fp.produitsPrix[k];
+  }
+  return 0;
+}
+
+// Helper : récupère la liste des sources de paiement
+export async function getSourcesPaiement(): Promise<string[]> {
+  const fp = await getFParamData();
+  return fp.sourcesPaiement;
+}
 
 // ============================================================
 //  Synchronisation : lit toutes les listes en parallèle
@@ -205,6 +243,7 @@ const FIELD_MAP: Record<string, Record<string, string>> = {
     commerciaux: 'commercial',
     nes: 'commercial',
     id: 'idCommande',
+    incubés: 'incubés',
   },
   ventes: {},
   depenses: {},
@@ -214,6 +253,10 @@ const FIELD_MAP: Record<string, Record<string, string>> = {
   commandes_poussins: {},
   bordereaux: {},
 };
+
+// Logging
+const OAC_LOGS: any[] = [];
+export function getOacLogs() { return [...OAC_LOGS]; }
 
 // Mapping type → action GAS (insert/update/delete)
 const ACTION_MAP: Record<string, { insert: string; update: string; delete: string }> = {
@@ -229,6 +272,11 @@ const ACTION_MAP: Record<string, { insert: string; update: string; delete: strin
 
 export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> {
   const { type, action: crudAction, item, subAction } = payload || {};
+
+  if (type === 'oac') {
+    OAC_LOGS.unshift({ ...payload, timestamp: new Date().toISOString() });
+    if (OAC_LOGS.length > 5) OAC_LOGS.pop();
+  }
 
   if (!type || !item) {
     return { success: false, message: 'Payload invalide (type ou item manquant)' };
@@ -344,6 +392,7 @@ async function _oacCommander(item: any): Promise<SyncResult> {
     cartons: item.cartons || 0,
     casses: item.nbCasses || 0,
     eclosion: item.eclosion || item.dateEclosion || '',
+    incubés: item.cubes || 0,
   };
   // Champs obligatoires côté GAS : cartons > 0 et eclosion non vide
   if (!data.cartons || data.cartons <= 0) {
@@ -381,22 +430,38 @@ async function _oacMirer(item: any): Promise<SyncResult> {
 
 // ── Action : oac.eclore ──
 async function _oacEclore(item: any): Promise<SyncResult> {
+  console.log('[DEBUG] _oacEclore item:', item);
+
   if (!item.id) {
-    return { success: false, message: 'ID commande manquant pour l\'éclosion.', timestamp: new Date().toLocaleTimeString('fr-FR') };
+    return {
+      success: false,
+      message: 'ID commande manquant pour l\'éclosion.',
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
   }
+
   const commNum = Number(item.commerciaux) || 0;
   if (commNum < 0) {
-    return { success: false, message: 'Le nombre de poussins commerciaux ne peut pas être négatif.', timestamp: new Date().toLocaleTimeString('fr-FR') };
+    return {
+      success: false,
+      message: 'Le nombre de poussins commerciaux ne peut pas être négatif.',
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
   }
+
+  // ✅ CORRECTION : utiliser idCommande (pas id)
   const data = {
-    id: item.id,
+    idCommande: item.id,                // ← 🔑 CORRIGÉ
     commercial: commNum,
-    nes: commNum,
-    pourVente: Number(item.pourVente) || commNum,
     morts: Number(item.morts) || 0,
     handicapes: Number(item.handicapes) || 0,
   };
+
+  console.log('[DEBUG] _oacEclore data sent to GAS:', data);
+
   const result = await callApi('oac.eclore', data, 'POST');
+  console.log('[DEBUG] _oacEclore GAS response:', result);
+
   const ok = result?.success && result?.data?.succes !== false;
   return {
     success: ok,

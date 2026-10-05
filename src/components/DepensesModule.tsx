@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Depense, OAC } from '../types';
+import { getSourcesPaiement } from '../services/googleSheet';
 
 export const CATEGORIES_SOUS_CATEGORIES: {
   categorie: string;
@@ -129,6 +130,19 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   const [libelle, setLibelle] = useState<string>('');
   const [montant, setMontant] = useState<string>('');
   const [sourcePaiement, setSourcePaiement] = useState<string>('');
+  const [sourcesPaiementList, setSourcesPaiementList] = useState<string[]>([
+    'Especes', 'Cheque', 'Virement', 'Carte', 'Mobile Money', 'Autre'
+  ]);
+
+  useEffect(() => {
+    (async () => {
+      const sources = await getSourcesPaiement();
+      if (sources && sources.length > 0) {
+        setSourcesPaiementList(sources);
+        console.log('[Depenses] Sources de paiement chargées:', sources);
+      }
+    })();
+  }, []);
   const [idCommande, setIdCommande] = useState<string>('');
 
   // Popup Sous-catégorie state
@@ -541,7 +555,7 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
                 }}
               >
                 <option value="">-- Choisir --</option>
-                {SOURCES_PAIEMENT.map((s) => (
+                {sourcesPaiementList.map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>

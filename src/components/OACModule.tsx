@@ -2,6 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { OAC, SoumissionEnAttente, UserRole } from '../types';
 import { TYPES_OAC, RACES_OAC, FOURNISSEURS_OAC } from '../data/initialData';
 import { playAlertSound } from '../utils/audio';
+import { DiagnosticLogModal } from './DiagnosticLogModal';
+import { getOacLogs } from '../services/googleSheet';
 
 interface OACModuleProps {
   oacList: OAC[];
@@ -41,6 +43,8 @@ export const OACModule: React.FC<OACModuleProps> = ({
 
   // Active correction mode for operator
   const [activeCorrection, setActiveCorrection] = useState<SoumissionEnAttente | null>(null);
+  const [isLogModalOpen, setIsLogModalOpen] = useState(false);
+  const [oacLogs, setOacLogs] = useState<any[]>([]);
 
   const pendingCount = soumissions.filter((s) => s.statut === 'En attente').length;
   const approvedCount = soumissions.filter((s) => s.statut === 'Approuvé').length;
@@ -686,16 +690,33 @@ export const OACModule: React.FC<OACModuleProps> = ({
       {/* Top Modal Window Bar */}
       <div className="flex items-center justify-between bg-white px-5 py-3 rounded-2xl border border-slate-200 shadow-sm">
         <h1 className="text-xl font-bold text-slate-800 tracking-tight">Gestion des OAC</h1>
-        {onClose && (
+        <div className="flex gap-2">
           <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 text-2xl font-bold p-1 leading-none transition"
-            title="Fermer"
+            onClick={() => {
+              setOacLogs(getOacLogs());
+              setIsLogModalOpen(true);
+            }}
+            className="text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg border"
           >
-            ✕
+            📋 Logs
           </button>
-        )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-700 text-2xl font-bold p-1 leading-none transition"
+              title="Fermer"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
+
+      <DiagnosticLogModal
+        isOpen={isLogModalOpen}
+        onClose={() => setIsLogModalOpen(false)}
+        logs={oacLogs}
+      />
 
       {/* Notification Toast */}
       {msg && (
@@ -1788,6 +1809,24 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   ✕ FERMER
                 </button>
               </div>
+
+              {/* Diagnostic Log Panel */}
+              {tabActif === 2 && eId && (
+                <div className="mt-6 bg-slate-900 text-emerald-400 p-4 rounded-xl text-[10px] font-mono border border-slate-700">
+                  <div className="font-bold text-slate-300 mb-2">DEBUG: Éclosion JSON Payload Preview</div>
+                  <pre className="overflow-x-auto">
+                    {JSON.stringify({
+                      ...(oacList.find((x) => x.id === eId) || {}),
+                      commerciaux: parseInt(eNes) || 0,
+                      nes: parseInt(eNes) || 0,
+                      handicapes: parseInt(eHan) || 0,
+                      morts: parseInt(eMor) || 0,
+                      pourVente: Math.max(0, (parseInt(eNes) || 0) - Math.ceil((parseInt(eNes) || 0) * 0.02)),
+                      complet: true,
+                    }, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           </div>
 

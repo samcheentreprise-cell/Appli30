@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { CommandePoussin, Client, OAC, UserRole } from '../types';
+import { getFParamData } from '../services/googleSheet';
 
 interface CommandesPoussinsModuleProps {
   commandes: CommandePoussin[];
@@ -68,14 +69,36 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   // Navigation View: 'accueil' | 'dashboard' | 'nouvelle' | 'chercher'
   const [view, setView] = useState<'accueil' | 'dashboard' | 'nouvelle' | 'chercher'>('accueil');
 
-  // Price determination based on breed/product type
+  // ✅ Prix chargés dynamiquement depuis F-Param (col E/F, à partir ligne 4)
+  const [produitsPrix, setProduitsPrix] = useState<Record<string, number>>({
+    'Chairs': 600,        // fallback si F-Param indisponible
+    'Sasso': 900,
+    'Fermier': 700,
+    'Cou-nu': 650,
+    'Pondeuse': 800,
+  });
+
+  // Charger F-Param au montage
+  useEffect(() => {
+    (async () => {
+      const fp = await getFParamData();
+      if (fp && Object.keys(fp.produitsPrix).length > 0) {
+        setProduitsPrix(fp.produitsPrix);
+        console.log('[CommandesPoussins] F-Param chargé:', fp);
+      }
+    })();
+  }, []);
+
+  // Prix d'un type (synchrone, avec fallback)
   const getPriceForType = (t: string): number => {
-    const s = t.toLowerCase();
-    if (s.includes('sasso')) return 900;
-    if (s.includes('cou-nu')) return 650;
-    if (s.includes('fermier')) return 700;
-    if (s.includes('pondeuse')) return 800;
-    return 600; // Chairs
+    const key = (t || '').trim();
+    if (produitsPrix[key] !== undefined) return produitsPrix[key];
+    // Recherche insensible à la casse
+    const lowerKey = key.toLowerCase();
+    for (const k of Object.keys(produitsPrix)) {
+      if (k.toLowerCase() === lowerKey) return produitsPrix[k];
+    }
+    return 0; // 0 si inconnu
   };
 
   // Helper to parse French date string DD/MM/YYYY into Date
@@ -223,6 +246,10 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       } else {
         const dObj = parseFrDate(cmdDate);
         const isPast = dObj ? dObj.getTime() < todayTime.getTime() : false;
+        
+        // Exclude past dates from new hatches
+        if (isPast) return;
+
         const rawType = cmd.typeProduit || 'Chairs';
         const cmdPrix = cmd.prixUnitaire || getPriceForType(rawType);
         const dateFormatee = dObj
@@ -258,13 +285,14 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     });
 
     // Sort chronologically: active/future dates first, then past dates
-    const sorted = Object.values(datesMap).sort((a, b) => {
-      const ta = a.dateObj ? a.dateObj.getTime() : 0;
-      const tb = b.dateObj ? b.dateObj.getTime() : 0;
-      if (a.isPast !== b.isPast) return a.isPast ? 1 : -1;
-      if (ta !== tb) return ta - tb;
-      return a.type.localeCompare(b.type);
-    });
+    const sorted = Object.values(datesMap)
+      .filter(d => !d.isPast) // Exclude past dates
+      .sort((a, b) => {
+        const ta = a.dateObj ? a.dateObj.getTime() : 0;
+        const tb = b.dateObj ? b.dateObj.getTime() : 0;
+        if (ta !== tb) return ta - tb;
+        return a.type.localeCompare(b.type);
+      });
 
     return sorted;
   }, [oacList, commandes]);
