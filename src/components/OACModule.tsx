@@ -3,7 +3,7 @@ import { OAC, SoumissionEnAttente, UserRole } from '../types';
 import { TYPES_OAC, RACES_OAC, FOURNISSEURS_OAC } from '../data/initialData';
 import { playAlertSound } from '../utils/audio';
 import { DiagnosticLogModal } from './DiagnosticLogModal';
-import { getOacLogs, getOacConfig } from '../services/googleSheet';
+import { getOacLogs, getOacConfig, getFParamData } from '../services/googleSheet';
 
 interface OACModuleProps {
   oacList: OAC[];
@@ -34,14 +34,22 @@ export const OACModule: React.FC<OACModuleProps> = ({
   role,
   onClose,
 }) => {
-  const [oacConfig, setOacConfig] = useState({ races: [], fournisseurs: [], typesOac: [] });
+  const [oacConfig, setOacConfig] = useState<{
+    typesOac: string[];
+    races: string[];
+    fournisseurs: string[];
+  }>({ typesOac: [], races: [], fournisseurs: [] });
 
   useEffect(() => {
-    async function loadConfig() {
-      const config = await getOacConfig();
-      setOacConfig(config);
-    }
-    loadConfig();
+    (async () => {
+      const fp = await getFParamData();
+      setOacConfig({
+        typesOac: fp.typesOAC?.length > 0 ? fp.typesOAC : ['Chairs'],
+        races: fp.racesOac?.length > 0 ? fp.racesOac : ['Ross 308'],
+        fournisseurs: fp.fournisseursOac?.length > 0 ? fp.fournisseursOac : ['Pak tavuk'],
+      });
+      console.log('[OAC] F-Param chargé:', fp);
+    })();
   }, []);
   // Main two tabs: 'validation' (default) vs 'cycle' (Commandes, Mirage, Eclosions)
   const [mainTab, setMainTab] = useState<'validation' | 'cycle'>(role === 'admin' ? 'validation' : 'cycle');
@@ -1165,7 +1173,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     }}
                   >
                     <option value="">--</option>
-                    {oacConfig.typesOac.map((t) => (
+                    {oacConfig.typesOac?.map((t) => (
                       <option key={t} value={t}>
                         {t}
                       </option>
@@ -1246,7 +1254,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     }}
                   >
                     <option value="">-- Choisir --</option>
-                    {oacConfig.races.map((r) => (
+                    {oacConfig.races?.map((r) => (
                       <option key={r} value={r}>
                         {r}
                       </option>
@@ -1269,7 +1277,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     }}
                   >
                     <option value="">-- Choisir --</option>
-                    {oacConfig.fournisseurs.map((f) => (
+                    {oacConfig.fournisseurs?.map((f) => (
                       <option key={f} value={f}>
                         {f}
                       </option>
@@ -2238,7 +2246,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                               onChange={(e) => setEditDonnees({ ...editDonnees, type: e.target.value })}
                               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
                             >
-                              {TYPES_OAC.map((t) => (
+                              {(oacConfig.typesOac?.length > 0 ? oacConfig.typesOac : TYPES_OAC).map((t) => (
                                 <option key={t} value={t}>{t}</option>
                               ))}
                             </select>
@@ -2251,7 +2259,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                               onChange={(e) => setEditDonnees({ ...editDonnees, race: e.target.value })}
                               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
                             >
-                              {RACES_OAC.map((r) => (
+                              {(oacConfig.races?.length > 0 ? oacConfig.races : RACES_OAC).map((r) => (
                                 <option key={r} value={r}>{r}</option>
                               ))}
                             </select>

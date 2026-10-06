@@ -7,12 +7,12 @@
     "node": ">=20"
   },
   "scripts": {
-  "dev": "tsx server.ts",
-  "build": "vite build",
-  "preview": "tsx server.ts",
-  "lint": "tsc --noEmit",
-  "start": "NODE_ENV=production tsx server.ts"
-},
+    "dev": "tsx server.ts",
+    "build": "vite build",
+    "preview": "tsx server.ts",
+    "lint": "tsc --noEmit",
+    "start": "node server.ts"
+  },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",

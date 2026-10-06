@@ -14,10 +14,10 @@ export const PWAInstallButton: React.FC = () => {
     return (
       <button
         onClick={install}
-        className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition"
+        className="flex items-center justify-center gap-2.5 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-black text-white shadow-md hover:bg-emerald-700 transition w-full sm:w-auto"
       >
-        <Download className="w-3.5 h-3.5" />
-        Installer
+        <Download className="w-5 h-5" />
+        Installer l'application
       </button>
     );
   }
@@ -27,10 +27,10 @@ export const PWAInstallButton: React.FC = () => {
       <>
         <button
           onClick={() => setShowIOSGuide(true)}
-          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition"
+          className="flex items-center justify-center gap-2.5 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-black text-white shadow-md hover:bg-emerald-700 transition w-full sm:w-auto"
         >
-          <Download className="w-3.5 h-3.5" />
-          Installer
+          <Download className="w-5 h-5" />
+          Installer l'application
         </button>
 
         {showIOSGuide && (

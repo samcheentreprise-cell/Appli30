@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { PWAInstallButton } from './PWAInstallButton';
 import { 
   Database, 
   Trash2, 
@@ -11,7 +12,8 @@ import {
   Check, 
   ShieldAlert,
   KeyRound,
-  Activity
+  Activity,
+  Smartphone
 } from 'lucide-react';
 import { 
   getGSheetWebappUrl, 
@@ -203,6 +205,18 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
         </section>
 
         {/* 1. Synchronisation Google Sheets */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+            <Smartphone className="w-4 h-4 text-emerald-700" />
+            <h2 className="text-base font-bold text-slate-800">Installation sur mobile</h2>
+          </div>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Pour une expérience optimale, installez l'application sur votre écran d'accueil.
+          </p>
+          <PWAInstallButton />
+        </section>
+
+        {/* 2. Synchronisation Google Sheets */}
         <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
             <Database className="w-4 h-4 text-sky-700" />

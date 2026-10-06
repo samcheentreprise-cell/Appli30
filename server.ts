@@ -227,7 +227,7 @@ async function startServer() {
   } else {
     console.log('[startup] Running in development mode');
     const vite = await createViteServer({
-      server: { middlewareMode: true, host: '0.0.0.0' },
+      server: { middlewareMode: true, host: '0.0.0.0', hmr: false },
       appType: 'spa',
     });
 

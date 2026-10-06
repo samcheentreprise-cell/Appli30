@@ -120,6 +120,11 @@ export async function getFParamData(force = false): Promise<{
   produitsPrix: Record<string, number>;
   sourcesPaiement: string[];
   typesProduits: string[];
+  typesOAC: string[];
+  races: string[];
+  racesOac: string[];
+  fournisseurs: string[];
+  fournisseursOac: string[];
 }> {
   if (_fparamCache && !force) return _fparamCache;
   const result = await callApi('fparam.get');
@@ -127,7 +132,10 @@ export async function getFParamData(force = false): Promise<{
     _fparamCache = result.data;
     return _fparamCache;
   }
-  return { produitsPrix: {}, sourcesPaiement: [], typesProduits: [] };
+  return {
+    produitsPrix: {}, sourcesPaiement: [], typesProduits: [],
+    typesOAC: [], races: [], racesOac: [], fournisseurs: [], fournisseursOac: []
+  };
 }
 
 // Helper : récupère le prix d'un type de produit (avec fallback)
@@ -146,21 +154,17 @@ export async function getPrixUnitaire(typeProduit: string, force: boolean = fals
 
 // Helper : récupère les données de configuration OAC (Race, Fournisseur, Type)
 // Ces données sont supposées provenir de la feuille "F-Param"
-// Colonne H: Type OAC, I: Race, K: Fournisseur. Données à partir de la ligne 4.
 export async function getOacConfig(force = false): Promise<{
   races: string[];
   fournisseurs: string[];
   typesOac: string[];
 }> {
-  const result = await callApi('fparam.get');
-  if (result?.success && result?.data) {
-    return {
-      races: result.data.Races || result.data.racesOac || [],
-      fournisseurs: result.data.Fournisseurs || result.data.fournisseursOac || [],
-      typesOac: result.data.TypesOAC || result.data.typesOac || [],
-    };
-  }
-  return { races: [], fournisseurs: [], typesOac: [] };
+  const result = await getFParamData(force);
+  return {
+    races: result.races || result.racesOac || [],
+    fournisseurs: result.fournisseurs || result.fournisseursOac || [],
+    typesOac: result.typesOAC || result.typesProduits || [],
+  };
 }
 
 // Helper : récupère la liste des sources de paiement
@@ -212,7 +216,7 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       recus: o.recus,
       nbCasses: o.casses ?? o.nbCasses ?? 0,
       cubes: o.cubes ?? ((o.cartons || 0) * 360 - (o.casses || 0)),
-      eclosion: o.dateEclosion || o.eclosion || '',
+      eclosion: o.dateEclosion || o.eclosion || o.dateEclo || '',  // ← fallback dateEclo
       clairs: o.clairs ?? null,
       fertiles: o.fertiles ?? o.cubes ?? 0,
       commerciaux: o.poussins ?? null,
@@ -375,15 +379,13 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
 }
 
 // ============================================================
-//  Helper : gestion spécifique des 3 actions OAC + DELETE
+//  Helper : gestion spécifique des actions OAC (insert/update/delete)
 // ============================================================
 async function _handleOacPush(
   crudAction: string,
   item: any,
   subAction?: 'commander' | 'mirer' | 'eclore'
 ): Promise<SyncResult> {
-  console.log(`[DEBUG] _handleOacPush called. Action: ${crudAction}, SubAction: ${subAction}, Item:`, item);
-  
   // INSERT = nouvelle commande → oac.commander
   if (crudAction === 'insert') {
     return _oacCommander(item);
@@ -417,7 +419,6 @@ async function _handleOacPush(
 async function _oacSupprimer(item: any): Promise<SyncResult> {
   console.log('[DEBUG] _oacSupprimer item:', item);
 
-  // Construire le payload : prioriser ligne, sinon idCommande (= item.id)
   const data: Record<string, any> = {};
   if (item.ligne) {
     data.ligne = item.ligne;
@@ -434,15 +435,6 @@ async function _oacSupprimer(item: any): Promise<SyncResult> {
   }
 
   console.log('[DEBUG] _oacSupprimer data sent to GAS:', data);
-
-  // DEBUG URL
-  const params = new URLSearchParams({ action: 'oac.supprimer', ...data });
-  const apiUrl = getGSheetWebappUrl();
-  const apiToken = getGSheetApiToken();
-  params.set('_gas_url', apiUrl);
-  params.set('_gas_token', apiToken);
-  const url = `${apiUrl}?${params.toString()}`;
-  console.log("[DEBUG] URL finale:", url);
 
   // ✅ GET marche mieux avec GAS (redirections 302)
   const result = await callApi('oac.supprimer', data, 'GET');
