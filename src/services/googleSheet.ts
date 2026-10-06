@@ -144,6 +144,25 @@ export async function getPrixUnitaire(typeProduit: string, force: boolean = fals
   return 0;
 }
 
+// Helper : récupère les données de configuration OAC (Race, Fournisseur, Type)
+// Ces données sont supposées provenir de la feuille "F-Param"
+// Colonne H: Type OAC, I: Race, K: Fournisseur. Données à partir de la ligne 4.
+export async function getOacConfig(force = false): Promise<{
+  races: string[];
+  fournisseurs: string[];
+  typesOac: string[];
+}> {
+  const result = await callApi('fparam.get');
+  if (result?.success && result?.data) {
+    return {
+      races: result.data.Races || result.data.racesOac || [],
+      fournisseurs: result.data.Fournisseurs || result.data.fournisseursOac || [],
+      typesOac: result.data.TypesOAC || result.data.typesOac || [],
+    };
+  }
+  return { races: [], fournisseurs: [], typesOac: [] };
+}
+
 // Helper : récupère la liste des sources de paiement
 export async function getSourcesPaiement(): Promise<string[]> {
   const fp = await getFParamData();
@@ -312,14 +331,35 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
 
   // DELETE : envoyer uniquement la clé
   if (crudAction === 'delete') {
+    console.log(`[DEBUG] SyncPush DELETE initiated for type: ${type}, action: ${gasAction}, item:`, item);
     const deleteData: Record<string, any> = {};
-    if (item.ligne) deleteData.ligne = item.ligne;
-    else if (item.id) deleteData.id = item.id;
-    else if (item.rowIndex) deleteData.rowIndex = item.rowIndex;
-    else if (item.index) deleteData.ligne = item.index;
-    const result = await callApi(gasAction, deleteData, 'POST');
+
+    // Cas spécial : commandePoussins a besoin de rowIndex + idCommande
+    if (type === 'commandes_poussins') {
+      if (item.rowIndex) deleteData.rowIndex = item.rowIndex;
+      if (item.id || item.idCommande) deleteData.idCommande = item.id || item.idCommande;
+    }
+    // Cas général : ligne (pour ventes, depenses, caisse, factures, bordereaux, clients)
+    else if (item.ligne) {
+      deleteData.ligne = item.ligne;
+    } else if (item.index) {
+      deleteData.ligne = item.index;
+    } else if (item.id) {
+      deleteData.id = item.id;
+    } else {
+      console.log(`[DEBUG] SyncPush DELETE error: missing key for ${type}`, item);
+      return {
+        success: false,
+        message: `Impossible de supprimer : ligne manquante pour ${type}`,
+        timestamp: new Date().toLocaleTimeString('fr-FR'),
+      };
+    }
+
+    console.log(`[DEBUG] SyncPush DELETE sending data (action: ${gasAction}):`, deleteData);
+    const result = await callApi(gasAction, deleteData, 'GET');
+    console.log(`[DEBUG] SyncPush DELETE raw response:`, result);
     return {
-      success: !!result?.success,
+      success: !!result?.success && result?.data?.succes !== false,
       message: result?.data?.message || result?.error || 'Suppression effectuée',
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     };
@@ -335,49 +375,85 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
 }
 
 // ============================================================
-//  Helper : gestion spécifique des 3 actions OAC
-//  - subAction explicite ('commander' | 'mirer' | 'eclore')
-//  - à défaut, détection automatique robuste
+//  Helper : gestion spécifique des 3 actions OAC + DELETE
 // ============================================================
 async function _handleOacPush(
   crudAction: string,
   item: any,
   subAction?: 'commander' | 'mirer' | 'eclore'
 ): Promise<SyncResult> {
-  // ── INSERT = nouvelle commande ──
+  console.log(`[DEBUG] _handleOacPush called. Action: ${crudAction}, SubAction: ${subAction}, Item:`, item);
+  
+  // INSERT = nouvelle commande → oac.commander
   if (crudAction === 'insert') {
-    const { ligne, ...rest } = item;
-    return _oacCommander(rest);   // laisse GAS ajouter la ligne
+    return _oacCommander(item);
   }
 
-  // ── UPDATE ──
+  // UPDATE → mirage / éclosion / commande
   if (crudAction === 'update') {
-    // 1) subAction explicite prioritaire
     if (subAction === 'mirer') return _oacMirer(item);
     if (subAction === 'eclore') return _oacEclore(item);
     if (subAction === 'commander') return _oacCommander(item);
 
-    // 2) Détection automatique robuste
     if (item.complet === true) return _oacEclore(item);
-
-    const hasEclosionFields =
-      (item.commerciaux ?? null) !== null ||
-      (item.nes ?? null) !== null ||
-      (item.handicapes ?? null) !== null ||
-      (item.morts ?? null) !== null ||
-      (item.pourVente ?? null) !== null;
-    if (hasEclosionFields) return _oacEclore(item);   // ✅ éclosion détectée AVANT mirage
-
     if (item.clairs !== undefined && item.clairs !== null && item.clairs !== '') {
       return _oacMirer(item);
     }
     return _oacCommander(item);
   }
 
-  // ── DELETE : pas supporté côté GAS ──
+  // DELETE → oac.supprimer (par ligne ou par idCommande)
+  if (crudAction === 'delete') {
+    return _oacSupprimer(item);
+  }
+
   return {
     success: false,
-    message: 'Suppression OAC non supportée par GAS. Ajoutez "oac.supprimer" côté Apps Script.',
+    message: `Action OAC non supportée : ${crudAction}`,
+  };
+}
+
+// ── Action : oac.supprimer ──
+async function _oacSupprimer(item: any): Promise<SyncResult> {
+  console.log('[DEBUG] _oacSupprimer item:', item);
+
+  // Construire le payload : prioriser ligne, sinon idCommande (= item.id)
+  const data: Record<string, any> = {};
+  if (item.ligne) {
+    data.ligne = item.ligne;
+  } else if (item.id) {
+    data.idCommande = item.id;
+  } else if (item.idCommande) {
+    data.idCommande = item.idCommande;
+  } else {
+    return {
+      success: false,
+      message: 'Impossible de supprimer : ligne ou idCommande manquant.',
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
+  }
+
+  console.log('[DEBUG] _oacSupprimer data sent to GAS:', data);
+
+  // DEBUG URL
+  const params = new URLSearchParams({ action: 'oac.supprimer', ...data });
+  const apiUrl = getGSheetWebappUrl();
+  const apiToken = getGSheetApiToken();
+  params.set('_gas_url', apiUrl);
+  params.set('_gas_token', apiToken);
+  const url = `${apiUrl}?${params.toString()}`;
+  console.log("[DEBUG] URL finale:", url);
+
+  // ✅ GET marche mieux avec GAS (redirections 302)
+  const result = await callApi('oac.supprimer', data, 'GET');
+
+  console.log('[DEBUG] _oacSupprimer GAS response:', result);
+
+  const ok = result?.success && result?.data?.succes !== false;
+  return {
+    success: ok,
+    message: result?.data?.message || result?.error || (ok ? 'OAC supprimée' : 'Échec suppression'),
+    timestamp: new Date().toLocaleTimeString('fr-FR'),
   };
 }
 

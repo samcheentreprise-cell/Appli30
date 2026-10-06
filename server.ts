@@ -36,7 +36,7 @@ async function callGas(action: string, extraParams: Record<string, string> = {})
   const url = `${SHEET_URL}?${params.toString()}`;
   const response = await axios.get(url, {
     maxRedirects: 5,
-    timeout: 15000,
+    timeout: 60000, // Increased to 60s
   });
   return response.data;
 }
@@ -56,16 +56,20 @@ app.post('/api/auth', async (req, res) => {
 
   try {
     // Étape 1 : récupérer la liste des utilisateurs
+    console.log('[DEBUG] Auth: Fetching users from GAS...');
     const params = new URLSearchParams({
       action: 'utilisateurs.lister',
       token: SHEET_TOKEN,
     });
     const url = `${SHEET_URL}?${params.toString()}`;
-    const response = await axios.get(url, { maxRedirects: 5, timeout: 15000 });
+    const response = await axios.get(url, { maxRedirects: 5, timeout: 60000 }); // Increased to 60s
+    console.log('[DEBUG] Auth: GAS response received');
     const result = response.data;
+    console.log('[DEBUG] Auth: GAS response data structure:', typeof result, result ? Object.keys(result) : 'null');
 
     const users = result?.data;
     if (!Array.isArray(users)) {
+      console.error('[DEBUG] Auth: Invalid data format, expected array in "data"', result);
       throw new Error('Format invalide : pas de tableau "data"');
     }
 

@@ -3,7 +3,7 @@ import { OAC, SoumissionEnAttente, UserRole } from '../types';
 import { TYPES_OAC, RACES_OAC, FOURNISSEURS_OAC } from '../data/initialData';
 import { playAlertSound } from '../utils/audio';
 import { DiagnosticLogModal } from './DiagnosticLogModal';
-import { getOacLogs } from '../services/googleSheet';
+import { getOacLogs, getOacConfig } from '../services/googleSheet';
 
 interface OACModuleProps {
   oacList: OAC[];
@@ -34,6 +34,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
   role,
   onClose,
 }) => {
+  const [oacConfig, setOacConfig] = useState({ races: [], fournisseurs: [], typesOac: [] });
+
+  useEffect(() => {
+    async function loadConfig() {
+      const config = await getOacConfig();
+      setOacConfig(config);
+    }
+    loadConfig();
+  }, []);
   // Main two tabs: 'validation' (default) vs 'cycle' (Commandes, Mirage, Eclosions)
   const [mainTab, setMainTab] = useState<'validation' | 'cycle'>(role === 'admin' ? 'validation' : 'cycle');
   const [tabActif, setTabActif] = useState<0 | 1 | 2>(0);
@@ -43,8 +52,6 @@ export const OACModule: React.FC<OACModuleProps> = ({
 
   // Active correction mode for operator
   const [activeCorrection, setActiveCorrection] = useState<SoumissionEnAttente | null>(null);
-  const [isLogModalOpen, setIsLogModalOpen] = useState(false);
-  const [oacLogs, setOacLogs] = useState<any[]>([]);
 
   const pendingCount = soumissions.filter((s) => s.statut === 'En attente').length;
   const approvedCount = soumissions.filter((s) => s.statut === 'Approuvé').length;
@@ -171,13 +178,18 @@ export const OACModule: React.FC<OACModuleProps> = ({
     setCLg(undefined);
     const d = new Date();
     setCDt(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
-    setCType('Chairs');
+    setCType(oacConfig.typesOac[0] || '');
     setCCar('');
     setCCas('');
-    setCRace('Ross 308');
-    setCFourn('Pak tavuk');
+    setCRace(oacConfig.races[0] || '');
+    setCFourn(oacConfig.fournisseurs[0] || '');
     setCJ21(true);
   };
+
+  // Initialiser lors du chargement de la config
+  useEffect(() => {
+    razC();
+  }, [oacConfig]);
 
   // -------------------------------------------------------------
   // Load item into Form 2 (Mirage)
@@ -691,15 +703,6 @@ export const OACModule: React.FC<OACModuleProps> = ({
       <div className="flex items-center justify-between bg-white px-5 py-3 rounded-2xl border border-slate-200 shadow-sm">
         <h1 className="text-xl font-bold text-slate-800 tracking-tight">Gestion des OAC</h1>
         <div className="flex gap-2">
-          <button
-            onClick={() => {
-              setOacLogs(getOacLogs());
-              setIsLogModalOpen(true);
-            }}
-            className="text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg border"
-          >
-            📋 Logs
-          </button>
           {onClose && (
             <button
               onClick={onClose}
@@ -711,12 +714,6 @@ export const OACModule: React.FC<OACModuleProps> = ({
           )}
         </div>
       </div>
-
-      <DiagnosticLogModal
-        isOpen={isLogModalOpen}
-        onClose={() => setIsLogModalOpen(false)}
-        logs={oacLogs}
-      />
 
       {/* Notification Toast */}
       {msg && (
@@ -1168,7 +1165,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     }}
                   >
                     <option value="">--</option>
-                    {TYPES_OAC.map((t) => (
+                    {oacConfig.typesOac.map((t) => (
                       <option key={t} value={t}>
                         {t}
                       </option>
@@ -1249,7 +1246,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     }}
                   >
                     <option value="">-- Choisir --</option>
-                    {RACES_OAC.map((r) => (
+                    {oacConfig.races.map((r) => (
                       <option key={r} value={r}>
                         {r}
                       </option>
@@ -1272,7 +1269,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     }}
                   >
                     <option value="">-- Choisir --</option>
-                    {FOURNISSEURS_OAC.map((f) => (
+                    {oacConfig.fournisseurs.map((f) => (
                       <option key={f} value={f}>
                         {f}
                       </option>
@@ -1377,12 +1374,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     <th className="px-3 py-2.5 text-right">Recus</th>
                     <th className="px-3 py-2.5 text-right">Casses</th>
                     <th className="px-3.5 py-2.5 text-center">Date eclo.</th>
+                    <th className="px-3.5 py-2.5 text-center">STATUT</th>
                     <th className="px-3 py-2.5 text-right">ID</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {oacList.map((item) => {
-                    const isRowSelected = selC === item.id;
+                  {oacList
+                    .filter((item) => item.statut !== 'Éclos')
+                    .map((item) => {
+                      const isRowSelected = selC === item.id;
 
                     return (
                       <tr
@@ -1406,6 +1406,9 @@ export const OACModule: React.FC<OACModuleProps> = ({
                         </td>
                         <td className="px-3.5 py-2 text-center whitespace-nowrap font-bold text-sky-950">
                           {item.eclosion}
+                        </td>
+                        <td className="px-3 py-2 text-center whitespace-nowrap font-bold text-amber-700 text-xs">
+                          {item.clairs == null ? "Incubation non miré" : "Miré"}
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-slate-500 text-[11px]">
                           {item.id}
@@ -1597,8 +1600,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {oacList.map((item, idx) => {
-                    const isRowSelected = selM === item.id;
+                  {oacList
+                    .filter((item) => item.statut !== 'Éclos')
+                    .map((item, idx) => {
+                      const isRowSelected = selM === item.id;
                     const incubes = item.cubes || (item.cartons * 360 - item.nbCasses);
                     const fertiles = item.fertiles !== undefined && item.fertiles !== null ? item.fertiles : incubes;
 
@@ -1834,8 +1839,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {oacList.map((item, idx) => {
-                    const isRowSelected = selE === item.id;
+                  {oacList
+                    .filter((item) => item.statut !== 'Éclos')
+                    .map((item, idx) => {
+                      const isRowSelected = selE === item.id;
 
                     return (
                       <tr
