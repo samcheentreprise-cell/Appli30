@@ -112,6 +112,7 @@ export async function callApi(
 export async function ping(): Promise<any> { return callApi('api.ping'); }
 export async function help(): Promise<any> { return callApi('api.help'); }
 
+
 // Cache global pour les données F-Param
 let _fparamCache: any = null;
 
@@ -130,8 +131,8 @@ export async function getFParamData(force = false): Promise<{
 }
 
 // Helper : récupère le prix d'un type de produit (avec fallback)
-export async function getPrixUnitaire(typeProduit: string): Promise<number> {
-  const fp = await getFParamData();
+export async function getPrixUnitaire(typeProduit: string, force: boolean = false): Promise<number> {
+  const fp = await getFParamData(force);
   const key = (typeProduit || '').trim();
   // Recherche exacte
   if (fp.produitsPrix[key] !== undefined) return fp.produitsPrix[key];
@@ -410,16 +411,30 @@ async function _oacCommander(item: any): Promise<SyncResult> {
   };
 }
 
-// ── Action : oac.mirer ──
+// ── Action : oac.mirer (via GET — testé et validé) ──
 async function _oacMirer(item: any): Promise<SyncResult> {
+  console.log('[DEBUG] _oacMirer item:', item);
+
   if (!item.id) {
-    return { success: false, message: 'ID commande manquant pour le mirage.', timestamp: new Date().toLocaleTimeString('fr-FR') };
+    return {
+      success: false,
+      message: 'ID commande manquant pour le mirage.',
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
   }
+
   const data = {
-    id: item.id,
+    idCommande: item.id,
     clairs: Number(item.clairs) || 0,
   };
-  const result = await callApi('oac.mirer', data, 'POST');
+
+  console.log('[DEBUG] _oacMirer data sent to GAS:', data);
+
+  // ✅ GET (pas POST) — GET marche pour oac.mirer
+  const result = await callApi('oac.mirer', data, 'GET');
+
+  console.log('[DEBUG] _oacMirer GAS response:', result);
+
   const ok = result?.success && result?.data?.succes !== false;
   return {
     success: ok,

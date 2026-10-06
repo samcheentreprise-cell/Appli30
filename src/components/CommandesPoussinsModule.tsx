@@ -71,7 +71,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
 
   // ✅ Prix chargés dynamiquement depuis F-Param (col E/F, à partir ligne 4)
   const [produitsPrix, setProduitsPrix] = useState<Record<string, number>>({
-    'Chairs': 600,        // fallback si F-Param indisponible
+    'Chairs': 700,        // fallback si F-Param indisponible
     'Sasso': 900,
     'Fermier': 700,
     'Cou-nu': 650,
@@ -190,7 +190,9 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       const race = (oac.race || '').trim();
       const prix = getPriceForType(type);
       const dObj = parseFrDate(dateKey);
-      const isPast = dObj ? dObj.getTime() < todayTime.getTime() && Boolean(oac.complet) : false;
+      // ✅ CORRECTION : une date passée = strictement avant aujourd'hui
+      // (indépendamment de "complet" — si la date est passée, on masque)
+      const isPast = dObj ? dObj.getTime() < todayTime.getTime() : false;
 
       const dateFormatee = dObj
         ? dObj.toLocaleDateString('fr-FR', {
@@ -222,6 +224,9 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
           lots: [],
           isPast: Boolean(isPast),
         };
+      } else {
+        // Mettre à jour le prix au cas où il a changé
+        datesMap[key].prix = prix;
       }
 
       datesMap[key].prevision += prevQty;
@@ -243,6 +248,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
 
       if (matching) {
         matching.commande += Number(cmd.quantite) || 0;
+        matching.prix = getPriceForType(matching.type);
       } else {
         const dObj = parseFrDate(cmdDate);
         const isPast = dObj ? dObj.getTime() < todayTime.getTime() : false;
@@ -280,6 +286,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
           };
         } else {
           datesMap[key].commande += Number(cmd.quantite) || 0;
+          datesMap[key].prix = getPriceForType(datesMap[key].type);
         }
       }
     });
@@ -295,7 +302,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       });
 
     return sorted;
-  }, [oacList, commandes]);
+  }, [oacList, commandes, produitsPrix]);
 
   // Active / Upcoming hatch dates (with incubator batches or future dates)
   const activeHatchDates = useMemo(() => {
@@ -809,6 +816,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {activeHatchDates.map((d) => {
                 const dispo = Math.max(0, d.prevision - d.commande);
+                // Correction du calcul du taux de remplissage : utiliser division flottante * 100 et arrondir
                 const taux = d.prevision > 0 ? Math.round((d.commande / d.prevision) * 100) : 0;
                 const progressWidth = Math.min(100, Math.max(0, taux));
                 const isComplet = dispo === 0 && d.prevision > 0;
@@ -946,9 +954,11 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                   return (
                     <div
                       key={d.id}
-                      onClick={() => {
+                      onClick={async () => {
                         setSelDateKey(d.date);
                         setSelType(d.type);
+                        const fp = await getFParamData(true);
+                        setProduitsPrix(fp.produitsPrix);
                       }}
                       className={`p-3.5 rounded-xl cursor-pointer transition text-white shadow-md relative overflow-hidden select-none ${
                         isSelected

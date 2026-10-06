@@ -130,16 +130,16 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   const [libelle, setLibelle] = useState<string>('');
   const [montant, setMontant] = useState<string>('');
   const [sourcePaiement, setSourcePaiement] = useState<string>('');
-  const [sourcesPaiementList, setSourcesPaiementList] = useState<string[]>([
-    'Especes', 'Cheque', 'Virement', 'Carte', 'Mobile Money', 'Autre'
-  ]);
+  const [sourcesPaiement, setSourcesPaiement] = useState<string[]>([]);
 
   useEffect(() => {
     (async () => {
       const sources = await getSourcesPaiement();
       if (sources && sources.length > 0) {
-        setSourcesPaiementList(sources);
+        setSourcesPaiement(sources);
         console.log('[Depenses] Sources de paiement chargées:', sources);
+      } else {
+        setSourcesPaiement(['Especes', 'Cheque', 'Virement', 'Carte', 'Mobile Money', 'Autre']);
       }
     })();
   }, []);
@@ -555,7 +555,7 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
                 }}
               >
                 <option value="">-- Choisir --</option>
-                {sourcesPaiementList.map((s) => (
+                {sourcesPaiement.map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>

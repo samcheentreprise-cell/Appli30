@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Depense, Vente, Client } from '../types';
-import { PRODUITS_PRIX } from '../data/initialData';
+import { getFParamData } from '../services/googleSheet';
 
 interface RechercheModuleProps {
   depenses: Depense[];
@@ -40,6 +40,15 @@ export const RechercheModule: React.FC<RechercheModuleProps> = ({
   const [vProduit, setVProduit] = useState('');
   const [vTypeVente, setVTypeVente] = useState('');
   const [vStatutPaiement, setVStatutPaiement] = useState('');
+
+  // Produits dynamiques depuis F-Param
+  const [produitsListDynamique, setProduitsListDynamique] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      const fp = await getFParamData();
+      setProduitsListDynamique(Object.keys(fp.produitsPrix));
+    })();
+  }, []);
 
   // Search execution trigger state (null if not yet searched)
   const [hasSearched, setHasSearched] = useState(false);
@@ -125,13 +134,12 @@ export const RechercheModule: React.FC<RechercheModuleProps> = ({
   }, [clients, ventes]);
 
   const produitsList = useMemo(() => {
-    const s = new Set<string>();
-    PRODUITS_PRIX.forEach((p) => s.add(p.nom));
+    const s = new Set<string>(produitsListDynamique);
     ventes.forEach((v) => {
       if (v.produit) s.add(v.produit);
     });
     return Array.from(s);
-  }, [ventes]);
+  }, [ventes, produitsListDynamique]);
 
   // ══════════════════════════════════════════════════════════════════════════
   // ACTIONS

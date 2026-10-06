@@ -9,6 +9,7 @@ export interface OAC {
   cartons: number;
   recus: number;
   nbCasses: number;
+  cubes?: number;
   incubés?: number;
   eclosion: string;
   clairs?: number | null;

@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Vente, Client, OAC } from '../types';
-import { PRODUITS_PRIX } from '../data/initialData';
+import { getFParamData } from '../services/googleSheet';
 
 interface VentesModuleProps {
   ventes: Vente[];
@@ -36,6 +36,16 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
   const [quantite, setQuantite] = useState<string>('');
   const [prixUnitaire, setPrixUnitaire] = useState<string>('');
   const [statutPaiement, setStatutPaiement] = useState<'Payee' | 'Avance' | 'Non payee'>('Payee');
+
+  // Produits et Prix dynamiques depuis F-Param
+  const [produitsPrix, setProduitsPrix] = useState<Record<string, number>>({});
+  
+  useEffect(() => {
+    (async () => {
+      const fp = await getFParamData();
+      setProduitsPrix(fp.produitsPrix);
+    })();
+  }, []);
 
   // Avance fields
   const [avanceAncien, setAvanceAncien] = useState<number>(0);
@@ -120,10 +130,8 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
   // Product selection handler: auto fills prix unitaire
   const handleProduitChange = (prodNom: string) => {
     setProduit(prodNom);
-    const found = PRODUITS_PRIX.find((p) => p.nom === prodNom);
-    if (found) {
-      setPrixUnitaire(String(found.prix));
-    }
+    const prix = produitsPrix[prodNom] || 0;
+    setPrixUnitaire(String(prix));
   };
 
   // Load a row for editing
@@ -590,9 +598,9 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
                 }}
               >
                 <option value="">-- Choisir --</option>
-                {PRODUITS_PRIX.map((p) => (
-                  <option key={p.nom} value={p.nom}>
-                    {p.nom}
+                {Object.keys(produitsPrix).map((nom) => (
+                  <option key={nom} value={nom}>
+                    {nom}
                   </option>
                 ))}
               </select>

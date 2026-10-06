@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Facture, Client, Bordereau, FactureLigne, BordereauLigne } from '../types';
-import { PRODUITS_PRIX } from '../data/initialData';
+import { getFParamData } from '../services/googleSheet';
 
 interface FacturesModuleProps {
   factures: Facture[];
@@ -64,6 +64,16 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
   const [factTVA, setFactTVA] = useState<number>(18);
   const [factAvecTVA, setFactAvecTVA] = useState<boolean>(false);
   const [factNotes, setFactNotes] = useState<string>('');
+
+  // Produits et Prix dynamiques depuis F-Param
+  const [produitsPrix, setProduitsPrix] = useState<Record<string, number>>({});
+  
+  useEffect(() => {
+    (async () => {
+      const fp = await getFParamData();
+      setProduitsPrix(fp.produitsPrix);
+    })();
+  }, []);
 
   // Facture lines
   const [factLignes, setFactLignes] = useState<FactureLigne[]>([
@@ -175,11 +185,10 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
     setFactLignes((prev) => {
       const next = [...prev];
       if (field === 'designation') {
-        const prod = PRODUITS_PRIX.find((p) => p.nom === value);
         next[index] = {
           ...next[index],
           designation: value,
-          pu: prod ? prod.prix : next[index].pu,
+          pu: produitsPrix[value] || 0,
         };
       } else {
         next[index] = { ...next[index], [field]: value };
@@ -772,9 +781,9 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                               className="w-full py-1.5 px-2.5 border border-slate-300 rounded-md text-xs bg-white focus:outline-none focus:border-[#1a3050]"
                             >
                               <option value="">-- Sélectionner --</option>
-                              {PRODUITS_PRIX.map((p) => (
-                                <option key={p.nom} value={p.nom}>
-                                  {p.nom} ({fm(p.prix)} F)
+                              {Object.keys(produitsPrix).map((nom) => (
+                                <option key={nom} value={nom}>
+                                  {nom} ({fm(produitsPrix[nom])} F)
                                 </option>
                               ))}
                             </select>
@@ -1070,9 +1079,9 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                             className="w-full py-1.5 px-2.5 border border-slate-300 rounded-md text-xs bg-white focus:outline-none focus:border-[#1a3050]"
                           >
                             <option value="">-- Sélectionner --</option>
-                            {PRODUITS_PRIX.map((p) => (
-                              <option key={p.nom} value={p.nom}>
-                                {p.nom}
+                            {Object.keys(produitsPrix).map((nom) => (
+                              <option key={nom} value={nom}>
+                                {nom}
                               </option>
                             ))}
                           </select>

@@ -1810,23 +1810,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </button>
               </div>
 
-              {/* Diagnostic Log Panel */}
-              {tabActif === 2 && eId && (
-                <div className="mt-6 bg-slate-900 text-emerald-400 p-4 rounded-xl text-[10px] font-mono border border-slate-700">
-                  <div className="font-bold text-slate-300 mb-2">DEBUG: Éclosion JSON Payload Preview</div>
-                  <pre className="overflow-x-auto">
-                    {JSON.stringify({
-                      ...(oacList.find((x) => x.id === eId) || {}),
-                      commerciaux: parseInt(eNes) || 0,
-                      nes: parseInt(eNes) || 0,
-                      handicapes: parseInt(eHan) || 0,
-                      morts: parseInt(eMor) || 0,
-                      pourVente: Math.max(0, (parseInt(eNes) || 0) - Math.ceil((parseInt(eNes) || 0) * 0.02)),
-                      complet: true,
-                    }, null, 2)}
-                  </pre>
-                </div>
-              )}
+
             </div>
           </div>
 
