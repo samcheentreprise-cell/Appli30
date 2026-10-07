@@ -462,8 +462,10 @@ export default function App() {
   const handleAddCommandePoussin = async (cmd: CommandePoussin) => {
     setCommandesPoussins((prev) => [cmd, ...prev]);
     const res = await syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'insert', item: cmd });
-    if (res.success) {
-      handleTriggerSync();
+    if (!res.success) {
+      console.error('[CommandePoussin] sync failed:', res.message);
+      // Optional: Revert the optimistic update if sync failed
+      setCommandesPoussins((prev) => prev.filter(c => c.id !== cmd.id));
     }
   };
 
@@ -472,8 +474,9 @@ export default function App() {
       prev.map((c) => (c.id === updated.id ? updated : c))
     );
     const res = await syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'update', item: updated });
-    if (res.success) {
-      handleTriggerSync();
+    if (!res.success) {
+      console.error('[CommandePoussin] update sync failed:', res.message);
+      // Optional: Revert optimistic update here if needed
     }
   };
 
@@ -485,8 +488,10 @@ export default function App() {
       action: 'delete', 
       item: { id, rowIndex: (target as any)?.rowIndex || 2 } 
     });
-    if (res.success) {
-      handleTriggerSync();
+    if (!res.success) {
+      console.error('[CommandePoussin] delete sync failed:', res.message);
+      // Optional: Revert optimistic deletion if sync failed
+      if (target) setCommandesPoussins((prev) => [target, ...prev]);
     }
   };
 
