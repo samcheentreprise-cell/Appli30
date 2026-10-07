@@ -44,6 +44,8 @@ async function callGas(action: string, extraParams: Record<string, string> = {})
 // ============================================================
 // Route d'authentification (mode permissif — à remplacer plus tard)
 // ============================================================
+import { APP_USERS } from './src/data/users';
+
 app.post('/api/auth', async (req, res) => {
   const { username, password } = req.body || {};
 
@@ -54,50 +56,19 @@ app.post('/api/auth', async (req, res) => {
     });
   }
 
-  try {
-    // Étape 1 : récupérer la liste des utilisateurs
-    console.log('[DEBUG] Auth: Fetching users from GAS...');
-    const params = new URLSearchParams({
-      action: 'utilisateurs.lister',
-      token: SHEET_TOKEN,
-    });
-    const url = `${SHEET_URL}?${params.toString()}`;
-    const response = await axios.get(url, { maxRedirects: 5, timeout: 60000 }); // Increased to 60s
-    console.log('[DEBUG] Auth: GAS response received');
-    const result = response.data;
-    console.log('[DEBUG] Auth: GAS response data structure:', typeof result, result ? Object.keys(result) : 'null');
+  // Authentification locale via src/data/users.ts
+  const user = APP_USERS.find(u => u.username === username && u.password === password);
 
-    const users = result?.data;
-    if (!Array.isArray(users)) {
-      console.error('[DEBUG] Auth: Invalid data format, expected array in "data"', result);
-      throw new Error('Format invalide : pas de tableau "data"');
-    }
-
-    // Étape 2 : trouver l'utilisateur par username
-    const user = users.find((u: any) => u.username === username);
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'Utilisateur introuvable',
-      });
-    }
-
-    // Étape 3 : mode permissif — accepter tout mot de passe non vide
-    // ⚠️ TEMPORAIRE : à remplacer par utilisateurs.authentifier quand vous
-    // aurez vérifié les vrais mots de passe dans la feuille Google Sheets
+  if (user) {
     return res.json({
       success: true,
       role: user.role,
       username: user.username,
-      ligne: user.ligne,
     });
-  } catch (error: any) {
-    console.error('[AUTH ERROR]', error?.response?.status, error?.message);
-    return res.status(500).json({
+  } else {
+    return res.status(401).json({
       success: false,
-      error: 'Erreur lors de la vérification',
-      details: error?.message,
+      error: 'Utilisateur introuvable ou mot de passe incorrect',
     });
   }
 });

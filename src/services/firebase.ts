@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { getAuth, Auth } from 'firebase/auth';
+import { getAuth, Auth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
 import firebaseConfigJson from '../../firebase-applet-config.json';
 
 export const firebaseConfig = {
@@ -24,5 +24,5 @@ try {
   console.warn('Firebase initialization warning:', e);
 }
 
-export { app, auth };
+export { app, auth, signInWithEmailAndPassword, onAuthStateChanged, signOut };
 

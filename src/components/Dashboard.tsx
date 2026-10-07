@@ -98,8 +98,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setDashData(result.data);
       console.log('[Dashboard] loaded:', result.data);
     } else {
-      setError(result?.error || 'Erreur de chargement du dashboard');
-      console.error('[Dashboard] error:', result);
+      console.warn('[Dashboard] Fallback to local data:', result);
+      setDashData(null);
     }
     setLoading(false);
   };

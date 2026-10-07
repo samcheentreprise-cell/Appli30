@@ -1416,7 +1416,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
                           {item.eclosion}
                         </td>
                         <td className="px-3 py-2 text-center whitespace-nowrap font-bold text-amber-700 text-xs">
-                          {item.clairs == null ? "Incubation non miré" : "Miré"}
+                          {
+                            (item.commerciaux != null) ? "Eclos" : 
+                            (item.clairs != null) ? "Miré" : 
+                            "En incubation"
+                          }
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-slate-500 text-[11px]">
                           {item.id}

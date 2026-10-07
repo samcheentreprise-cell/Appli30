@@ -174,6 +174,38 @@ export async function getSourcesPaiement(): Promise<string[]> {
 }
 
 // ============================================================
+//  Helper local : extraction sécurisée d'un tableau depuis une réponse GAS
+//  - res peut être undefined / null
+//  - res peut être directement un tableau
+//  - res.data peut être un tableau
+//  - res.data peut contenir la clé cherchée
+//  - la clé peut aussi être à la racine de res (sans wrapper `data`)
+//  - on vérifie systématiquement Array.isArray() pour éviter objets/strings
+// ============================================================
+function safeArray(res: any, ...keys: string[]): any[] {
+  try {
+    if (!res) return [];
+    if (Array.isArray(res)) return res;
+
+    const data = res.data;
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') {
+      for (const k of keys) {
+        if (Array.isArray(data[k])) return data[k];
+      }
+    }
+    // Fallback : chercher à la racine de res
+    for (const k of keys) {
+      if (Array.isArray(res[k])) return res[k];
+    }
+    return [];
+  } catch (err) {
+    console.error('[safeArray] erreur lors de l\'extraction:', err, { res, keys });
+    return [];
+  }
+}
+
+// ============================================================
 //  Synchronisation : lit toutes les listes en parallèle
 // ============================================================
 export async function fetchGoogleSheetsData(): Promise<SyncResult> {
@@ -192,18 +224,37 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       callApi('bordereaux.lister'),
     ]);
 
-    const failed = [oacRes, ventesRes, depensesRes, caisseRes, clientsRes, facturesRes, cmdPoussinsRes, bordereauxRes]
-      .find(r => !r?.success);
-    if (failed) {
-      return {
-        success: false,
-        message: failed.error || failed.data?.error || 'Une action GAS a échoué',
-      };
+    // Vérification : si une réponse est manquante ou marquée échouée, on sort tôt
+    const responses = [
+      { name: 'oac',          res: oacRes },
+      { name: 'ventes',       res: ventesRes },
+      { name: 'depenses',     res: depensesRes },
+      { name: 'caisse',       res: caisseRes },
+      { name: 'clients',      res: clientsRes },
+      { name: 'factures',     res: facturesRes },
+      { name: 'cmdPoussins',  res: cmdPoussinsRes },
+      { name: 'bordereaux',   res: bordereauxRes },
+    ];
+
+    // Ne pas échouer la sync globale si une seule action échoue
+    const failedActions = responses.filter(r => !r.res?.success);
+    if (failedActions.length > 0) {
+      console.warn('[fetchGoogleSheetsData] Certaines actions ont échoué:', failedActions);
+    }
+
+    // Log léger pour diagnostic (à retirer une fois stabilisé)
+    if (typeof console !== 'undefined') {
+      responses.forEach(({ name, res }) => {
+        const hasData = res && (Array.isArray(res.data) || (res.data && typeof res.data === 'object'));
+        if (!hasData) {
+          console.warn(`[fetchGoogleSheetsData] Réponse "${name}" sans champ data exploitable:`, res);
+        }
+      });
     }
 
     // Mapping OAC : transforme les champs GAS → React
     // Supporte { commandes: [...] } ou directement [...]
-    const rawOacData = oacRes.data?.commandes || (Array.isArray(oacRes.data) ? oacRes.data : []);
+    const rawOacData = safeArray(oacRes, 'commandes');
     const oacList = rawOacData.map((o: any) => ({
       _v: 25,
       ligne: o.ligne,
@@ -231,15 +282,22 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       statut: o.statut,
     }));
 
+    // ============================================================
+    //  Construction du parsedData — extraction sécurisée via safeArray()
+    //  Ancien code :
+    //    ventes: ventesRes.data?.ventes || [],
+    //  Nouveau code : tolère data null/undefined, vérifie Array.isArray,
+    //                 et cherche aussi à la racine de la réponse GAS.
+    // ============================================================
     const parsedData = {
       oacList,
-      ventes:            ventesRes.data?.ventes         || [],
-      depenses:          depensesRes.data?.depenses     || [],
-      mouvementsCaisse:  caisseRes.data?.mouvements     || [],
-      clients:           Array.isArray(clientsRes.data) ? clientsRes.data : (clientsRes.data?.clients || []),
-      factures:          facturesRes.data?.factures     || [],
-      commandesPoussins: Array.isArray(cmdPoussinsRes.data) ? cmdPoussinsRes.data : (cmdPoussinsRes.data?.commandes || []),
-      bordereaux:        bordereauxRes.data?.bordereaux || [],
+      ventes:            safeArray(ventesRes,        'ventes'),
+      depenses:          safeArray(depensesRes,      'depenses'),
+      mouvementsCaisse:  safeArray(caisseRes,        'mouvements'),
+      clients:           safeArray(clientsRes,       'clients'),
+      factures:          safeArray(facturesRes,      'factures'),
+      commandesPoussins: safeArray(cmdPoussinsRes,   'commandes', 'commandesPoussins'),
+      bordereaux:        safeArray(bordereauxRes,    'bordereaux'),
       soumissions:       [],
     };
 
@@ -250,6 +308,7 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     };
   } catch (err: any) {
+    console.error('[fetchGoogleSheetsData] Exception:', err);
     return { success: false, message: err.message || 'Erreur réseau' };
   }
 }
