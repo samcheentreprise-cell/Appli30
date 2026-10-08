@@ -17,6 +17,7 @@ interface OACModuleProps {
   onUpdateSoumission?: (soumission: SoumissionEnAttente) => void;
   onRefreshSoumissions?: () => void;
   role: UserRole;
+  currentUser: {username: string, role: UserRole} | null;
   onClose?: () => void;
 }
 
@@ -32,6 +33,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   onUpdateSoumission,
   onRefreshSoumissions,
   role,
+  currentUser,
   onClose,
 }) => {
   const [oacConfig, setOacConfig] = useState<{
@@ -322,7 +324,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
             ligne: soumissions.length + 1,
             idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
             type: 'Commande',
-            soumisPar: 'Opérateur',
+            soumisPar: currentUser?.username || 'Opérateur',
             dateSoumission: new Date().toLocaleDateString('fr-FR'),
             statut: 'En attente',
             resume,
@@ -429,7 +431,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
               ligne: soumissions.length + 1,
               idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
               type: 'Mirage',
-              soumisPar: 'Opérateur',
+              soumisPar: currentUser?.username || 'Opérateur',
               dateSoumission: new Date().toLocaleDateString('fr-FR'),
               statut: 'En attente',
               resume,
@@ -512,7 +514,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
               ligne: soumissions.length + 1,
               idSoumission: `ATT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10000 + Math.random() * 90000)}`,
               type: 'Éclosion',
-              soumisPar: 'Opérateur',
+              soumisPar: currentUser?.username || 'Opérateur',
               dateSoumission: new Date().toLocaleDateString('fr-FR'),
               statut: 'En attente',
               resume,

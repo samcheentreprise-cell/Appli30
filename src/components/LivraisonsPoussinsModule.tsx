@@ -233,20 +233,20 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
     });
 
     return Object.values(map).sort((a, b) => {
-      // Prioritize "en cours"
-      if (a.isEnCours && !b.isEnCours) return -1;
-      if (!a.isEnCours && b.isEnCours) return 1;
-
-      const ta = a.dateObj ? a.dateObj.getTime() : 0;
-      const tb = b.dateObj ? b.dateObj.getTime() : 0;
+      const todayMs = new Date().setHours(0, 0, 0, 0);
+      const ta = a.dateObj ? Math.abs(a.dateObj.getTime() - todayMs) : Infinity;
+      const tb = b.dateObj ? Math.abs(b.dateObj.getTime() - todayMs) : Infinity;
+      
       if (ta !== tb) return ta - tb;
       return a.type.localeCompare(b.type);
     });
   }, [oacList, commandes]);
 
-  // Determine active "Lot en cours" automatically (the first en cours lot)
+  // Determine active "Lot en cours" automatically (the first future or today's lot)
   const defaultLotEnCours = useMemo(() => {
-    return hatchLots.find((l) => l.isEnCours) || hatchLots[0] || null;
+    const todayMs = new Date().setHours(0, 0, 0, 0);
+    const futureLots = hatchLots.filter(l => l.dateObj && l.dateObj.getTime() >= todayMs);
+    return futureLots.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())[0] || hatchLots[0] || null;
   }, [hatchLots]);
 
   // Selected Lot key (locked strictly to current active lot by default)

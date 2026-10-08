@@ -669,6 +669,17 @@ export default function App() {
     prevRejectedCountRef.current = rejectedSoumissions.length;
   }, [rejectedSoumissions.length, currentRole]);
 
+  // Monitor pending declarations to play alert sound for admins
+  const pendingSoumissionsCount = soumissions.filter((s) => s.statut === 'En attente').length;
+  const prevPendingCountRef = React.useRef(pendingSoumissionsCount);
+
+  useEffect(() => {
+    if (currentRole === 'admin' && pendingSoumissionsCount > prevPendingCountRef.current) {
+      playAlertSound('success');
+    }
+    prevPendingCountRef.current = pendingSoumissionsCount;
+  }, [pendingSoumissionsCount, currentRole]);
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
       <PWAInstallBanner />
@@ -735,6 +746,7 @@ export default function App() {
                 onUpdateSoumission={handleUpdateSoumission}
                 onRefreshSoumissions={handleRefreshSoumissions}
                 role={currentRole}
+                currentUser={currentUser}
                 onClose={() => setActiveTab(currentRole === 'utilisateur' ? 'calendrier' : 'dashboard')}
               />
             )}

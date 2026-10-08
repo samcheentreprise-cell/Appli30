@@ -108,31 +108,42 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
         (lot.fertiles !== undefined && lot.fertiles !== null)
       );
 
-      let statut: 'Incubation' | 'Miré' | 'En éclosion' | 'Éclos' = 'Incubation';
       let statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
       let isAlerteMirage = false;
       let isAlerteEclosion = false;
 
-      if (hasDonneesEclosion) {
-        // 1. ÉCLOS (si les données de l'éclosion sont enregistrées)
-        statut = 'Éclos';
-        statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-extrabold';
-      } else if (joursElapsed >= 21 || (joursAvantEclosion !== null && joursAvantEclosion <= 0)) {
-        // 2. EN ÉCLOSION (échéance d'éclosion atteinte mais résultats non encore enregistrés)
-        statut = 'En éclosion';
-        statutBadge = 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse';
-        isAlerteEclosion = true;
-      } else if (hasDonneesMirage || (joursElapsed >= 18 && joursElapsed < 21) || (joursAvantMirage !== null && joursAvantMirage <= 0)) {
-        // 3. MIRÉ (mirage réalisé ou échéance J18 atteinte)
-        statut = 'Miré';
-        statutBadge = 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold';
-        isAlerteMirage = true;
-      } else {
-        // 4. INCUBATION (J0 à J17)
+      let statut: 'Incubation' | 'Miré' | 'En éclosion' | 'Éclos' = (lot.statut as any) || 'Incubation';
+      if (!['Incubation', 'Miré', 'En éclosion', 'Éclos'].includes(statut)) {
         statut = 'Incubation';
-        statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
-        if (joursAvantMirage === 1 || joursAvantMirage === 0) {
+        if (hasDonneesEclosion) {
+          // 1. ÉCLOS (si les données de l'éclosion sont enregistrées)
+          statut = 'Éclos';
+          statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-extrabold';
+        } else if (joursElapsed >= 21 || (joursAvantEclosion !== null && joursAvantEclosion <= 0)) {
+          // 2. EN ÉCLOSION (échéance d'éclosion atteinte mais résultats non encore enregistrées)
+          statut = 'En éclosion';
+          statutBadge = 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse';
+          isAlerteEclosion = true;
+        } else if (hasDonneesMirage || (joursElapsed >= 18 && joursElapsed < 21) || (joursAvantMirage !== null && joursAvantMirage <= 0)) {
+          // 3. MIRÉ (mirage réalisé ou échéance J18 atteinte)
+          statut = 'Miré';
+          statutBadge = 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold';
           isAlerteMirage = true;
+        } else {
+          // 4. INCUBATION (J0 à J17)
+          statut = 'Incubation';
+          statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
+          if (joursAvantMirage === 1 || joursAvantMirage === 0) {
+            isAlerteMirage = true;
+          }
+        }
+      } else {
+        // Set badge based on statut
+        switch (statut) {
+          case 'Éclos': statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-extrabold'; break;
+          case 'En éclosion': statutBadge = 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse'; break;
+          case 'Miré': statutBadge = 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold'; break;
+          default: statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
         }
       }
 

@@ -147,6 +147,8 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     id: string;
     waClient?: string;
     waGest?: string;
+    quantite?: number;
+    total?: number;
   }>({
     open: false,
     id: '',
@@ -337,6 +339,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   const prixUnitaire = selectedHatchDate ? selectedHatchDate.prix : getPriceForType(selType || 'Chairs');
   const typeProduit = selectedHatchDate?.type || selType || 'Chairs';
   const montantTotal = quantite * prixUnitaire;
+  const availableStock = useMemo(() => selectedHatchDate ? Math.max(0, selectedHatchDate.prevision - selectedHatchDate.commande) : 0, [selectedHatchDate]);
 
   // Overall KPI across active dates
   const { totalPrevision, totalCommande, totalDisponible, tauxGlobal } = useMemo(() => {
@@ -497,6 +500,8 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       id,
       waClient: waClientLink,
       waGest: waGestLink,
+      quantite,
+      total: montantTotalFinal,
     });
 
     // Reset Form completely
@@ -647,15 +652,17 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
 
       {/* Toast Alert */}
       {notif && (
-        <div
-          className={`mb-4 p-3.5 rounded-xl font-bold text-xs sm:text-sm text-center shadow-lg transition animate-fade-in ${
-            notif.ok
-              ? 'bg-[#10b981] text-white'
-              : 'bg-[#ef4444] text-white'
-          }`}
-        >
-          {notif.ok ? '✅ ' : '⚠️ '}
-          {notif.text}
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-300">
+          <div
+            className={`p-8 rounded-3xl font-black text-center shadow-2xl border-4 flex flex-col items-center gap-4 max-w-sm w-full ${
+              notif.ok
+                ? 'bg-emerald-500 text-white border-emerald-200'
+                : 'bg-red-500 text-white border-red-200'
+            }`}
+          >
+            <span className="text-6xl">{notif.ok ? '✅' : '⚠️'}</span>
+            <span className="text-xl sm:text-2xl">{notif.text}</span>
+          </div>
         </div>
       )}
 
@@ -950,7 +957,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
           VIEW 3: NOUVELLE COMMANDE (Screenshots 3 & 4)
          ══════════════════════════════════════════════════════════════════════════ */}
       {view === 'nouvelle' && (
-        <div className="bg-white rounded-3xl max-w-2xl mx-auto shadow-2xl overflow-hidden border border-slate-200 animate-slide-up">
+        <div className="bg-white rounded-3xl max-w-2xl mx-auto shadow-2xl overflow-hidden border border-slate-200 animate-slide-up flex flex-col h-[90vh]">
           {/* Header */}
           <div className="bg-gradient-to-r from-[#5b7c99] to-[#6b8db5] text-white p-5 text-center">
             <h1 className="text-lg font-bold flex items-center justify-center gap-2">
@@ -963,7 +970,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
           </div>
 
           {/* Form Content */}
-          <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+          <div className="p-6 space-y-6 flex-1 overflow-y-auto">
             {/* Section 1: Date d'éclosion cards */}
             <div className="space-y-2.5">
               <div className="text-xs font-bold uppercase tracking-wider text-[#5b7c99] flex items-center gap-1.5 border-l-2 border-[#5b7c99] pl-2">
@@ -1176,9 +1183,14 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
 
             {/* Section 4: Quantité */}
             <div>
-              <div className="text-xs font-bold uppercase tracking-wider text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span>📦</span>
-                <span>Quantité</span>
+              <div className="text-xs font-bold uppercase tracking-wider text-[#2c3e50] mb-1.5 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span>📦</span>
+                  <span>Quantité</span>
+                </div>
+                <div className={`font-black text-[10px] ${availableStock === 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                   Disponible : {availableStock.toLocaleString('fr-FR')}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -1191,8 +1203,12 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                 <input
                   type="number"
                   min="1"
+                  max={availableStock}
                   value={quantite}
-                  onChange={(e) => setQuantite(Math.max(1, parseInt(e.target.value) || 1))}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value) || 1;
+                    setQuantite(Math.min(val, availableStock));
+                  }}
                   className="flex-1 py-2.5 px-3 border-2 border-[#5b7c99] rounded-lg text-center font-bold text-base bg-gradient-to-r from-[#f0f4f8] to-[#ede9fe] text-[#4f46e5] focus:outline-none"
                 />
                 <button
@@ -1469,6 +1485,15 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             </div>
 
             <div className="space-y-2 pt-2">
+              <div className="bg-slate-50 p-4 rounded-xl text-left text-xs text-slate-700 border border-slate-200">
+                <p className="font-bold border-b pb-2 mb-2">Résumé de la commande</p>
+                <p><strong>Client :</strong> {selClient?.prenom} {selClient?.nom}</p>
+                <p><strong>Type :</strong> {typeProduit}</p>
+                <p><strong>Qté :</strong> {successModal.quantite?.toLocaleString('fr-FR')}</p>
+                <p><strong>Total :</strong> {successModal.total?.toLocaleString('fr-FR')} F CFA</p>
+                <p><strong>Éclosion :</strong> {selDateKey}</p>
+              </div>
+
               {successModal.waClient && (
                 <a
                   href={successModal.waClient}
@@ -1489,15 +1514,13 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                   📱 WhatsApp Gestionnaire
                 </a>
               )}
+              <button
+                onClick={() => setSuccessModal({ open: false, id: '' })}
+                className="block w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
+              >
+                Fermer
+              </button>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setSuccessModal({ open: false, id: '' })}
-              className="w-full py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50"
-            >
-              Fermer
-            </button>
           </div>
         </div>
       )}

@@ -676,14 +676,17 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
 
       {/* Bottom Toast */}
       {toast && (
-        <div
-          className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-xl font-bold text-xs sm:text-sm shadow-xl transition-all ${
-            toast.ok
-              ? 'bg-[#ECFDF5] text-[#059669] border border-[#BBF7D0]'
-              : 'bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA]'
-          }`}
-        >
-          {toast.message}
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-300">
+          <div
+            className={`p-8 rounded-3xl font-black text-center shadow-2xl border-4 flex flex-col items-center gap-4 max-w-sm w-full ${
+              toast.ok
+                ? 'bg-emerald-500 text-white border-emerald-200'
+                : 'bg-red-500 text-white border-red-200'
+            }`}
+          >
+            <span className="text-6xl">{toast.ok ? '✅' : '⚠️'}</span>
+            <span className="text-xl sm:text-2xl">{toast.message}</span>
+          </div>
         </div>
       )}
     </div>

@@ -21,6 +21,7 @@ export interface OAC {
   morts?: number | null;
   complet?: boolean;
   notes?: string;
+  statut?: string;
 }
 
 export interface SoumissionEnAttente {

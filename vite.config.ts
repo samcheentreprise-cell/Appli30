@@ -23,7 +23,9 @@ export default defineConfig(({ mode }) => {
           start_url: '/',
           scope: '/',
           icons: [
-            { src: '/logo-samche.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }
+            { src: '/logo-samche.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: '/logo-samche.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: '/logo-samche.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' }
           ],
         },
         devOptions: {
