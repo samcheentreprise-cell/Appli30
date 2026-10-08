@@ -185,19 +185,38 @@ export async function getSourcesPaiement(): Promise<string[]> {
 function safeArray(res: any, ...keys: string[]): any[] {
   try {
     if (!res) return [];
+
+    // Cas 1 : res est déjà un tableau
     if (Array.isArray(res)) return res;
 
+    // Cas 2 : res.data est un tableau
     const data = res.data;
     if (Array.isArray(data)) return data;
+
+    // Cas 3 : res.data.<key> est un tableau (clés attendues)
     if (data && typeof data === 'object') {
       for (const k of keys) {
         if (Array.isArray(data[k])) return data[k];
       }
+      // Cas 3b : n'importe quelle autre clé de data contient un tableau
+      // (utile si GAS renvoie data.items / data.rows / data.liste etc.)
+      for (const k of Object.keys(data)) {
+        if (Array.isArray(data[k])) return data[k];
+      }
     }
-    // Fallback : chercher à la racine de res
+
+    // Cas 4 : chercher à la racine de res
     for (const k of keys) {
       if (Array.isArray(res[k])) return res[k];
     }
+    // Cas 4b : n'importe quelle autre clé à la racine
+    for (const k of Object.keys(res)) {
+      if (k === 'data') continue;
+      if (Array.isArray(res[k])) return res[k];
+    }
+
+    // Rien trouvé → on retourne [] mais on log pour diagnostic
+    console.warn('[safeArray] Aucun tableau trouvé dans la réponse. keys attendues:', keys, '— réponse reçue:', res);
     return [];
   } catch (err) {
     console.error('[safeArray] erreur lors de l\'extraction:', err, { res, keys });
@@ -224,7 +243,9 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       callApi('bordereaux.lister'),
     ]);
 
-    // Vérification : si une réponse est manquante ou marquée échouée, on sort tôt
+    // Vérification : si une réponse est marquée explicitement success=false,
+    // on ne bloque plus toute la sync — on log et on continue avec [] pour cette entité.
+    // Cela permet à l'OAC de s'afficher même si ventes/depenses/etc. échouent.
     const responses = [
       { name: 'oac',          res: oacRes },
       { name: 'ventes',       res: ventesRes },
@@ -236,20 +257,35 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       { name: 'bordereaux',   res: bordereauxRes },
     ];
 
-    // Ne pas échouer la sync globale si une seule action échoue
-    const failedActions = responses.filter(r => !r.res?.success);
-    if (failedActions.length > 0) {
-      console.warn('[fetchGoogleSheetsData] Certaines actions ont échoué:', failedActions);
-    }
+    // Log détaillé pour diagnostic — affiche la structure de chaque réponse
+    console.group('[fetchGoogleSheetsData] Réponses GAS');
+    responses.forEach(({ name, res }) => {
+      const status = res?.success === false ? '❌ ÉCHEC'
+        : (res && (Array.isArray(res.data) || (res.data && typeof res.data === 'object') || Array.isArray(res)))
+          ? '✓ OK'
+          : '⚠ structure inattendue';
+      console.log(`  ${name}: ${status}`, res);
+    });
+    console.groupEnd();
 
-    // Log léger pour diagnostic (à retirer une fois stabilisé)
-    if (typeof console !== 'undefined') {
-      responses.forEach(({ name, res }) => {
-        const hasData = res && (Array.isArray(res.data) || (res.data && typeof res.data === 'object'));
-        if (!hasData) {
-          console.warn(`[fetchGoogleSheetsData] Réponse "${name}" sans champ data exploitable:`, res);
-        }
-      });
+    // On ne bloque plus toute la sync si une seule action échoue.
+    // On retourne quand même un message d'avertissement global.
+    const failedActions = responses.filter(r => r.res?.success === false);
+    if (failedActions.length === responses.length) {
+      // Toutes les actions ont échoué — on sort en échec
+      const first = failedActions[0];
+      console.error('[fetchGoogleSheetsData] Toutes les actions GAS ont échoué. Première:', first);
+      return {
+        success: false,
+        message: first.res?.error
+          || first.res?.data?.error
+          || `Toutes les actions GAS ont échoué (première: ${first.name})`,
+      };
+    }
+    if (failedActions.length > 0) {
+      console.warn('[fetchGoogleSheetsData] Actions partiellement échouées:',
+        failedActions.map(f => f.name).join(', '),
+        '— sync partielle, les autres entités seront vides.');
     }
 
     // Mapping OAC : transforme les champs GAS → React
@@ -303,7 +339,9 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
 
     return {
       success: true,
-      message: 'Synchronisation réussie',
+      message: failedActions.length > 0
+        ? `Sync partielle : ${failedActions.map(f => f.name).join(', ')} en échec`
+        : 'Synchronisation réussie',
       parsedData,
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     };
@@ -429,10 +467,7 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
   }
 
   const result = await callApi(gasAction, data, 'POST');
-  // ✅ Vérifier les deux orthographes (succes FR + success EN)
-  // Certaines fonctions GAS retournent "succes" (FR), d'autres "success" (EN)
-  const innerSuccess = result?.data?.succes !== false && result?.data?.success !== false;
-  const ok = !!result?.success && innerSuccess;
+  const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
     message: result?.data?.message || result?.error || (ok ? 'Écriture OK' : 'Écriture échouée'),
@@ -503,7 +538,7 @@ async function _oacSupprimer(item: any): Promise<SyncResult> {
 
   console.log('[DEBUG] _oacSupprimer GAS response:', result);
 
-  const ok = result?.success && result?.data?.succes !== false;
+  const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
     message: result?.data?.message || result?.error || (ok ? 'OAC supprimée' : 'Échec suppression'),
@@ -533,7 +568,7 @@ async function _oacCommander(item: any): Promise<SyncResult> {
     return { success: false, message: "La date d'éclosion est obligatoire.", timestamp: new Date().toLocaleTimeString('fr-FR') };
   }
   const result = await callApi('oac.commander', data, 'POST');
-  const ok = result?.success && result?.data?.succes !== false;
+  const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
     message: result?.data?.message || result?.error || (ok ? 'Commande enregistrée' : 'Échec commande'),
@@ -565,7 +600,7 @@ async function _oacMirer(item: any): Promise<SyncResult> {
 
   console.log('[DEBUG] _oacMirer GAS response:', result);
 
-  const ok = result?.success && result?.data?.succes !== false;
+  const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
     message: result?.data?.message || result?.error || (ok ? 'Mirage enregistré' : 'Échec mirage'),
@@ -607,7 +642,7 @@ async function _oacEclore(item: any): Promise<SyncResult> {
   const result = await callApi('oac.eclore', data, 'POST');
   console.log('[DEBUG] _oacEclore GAS response:', result);
 
-  const ok = result?.success && result?.data?.succes !== false;
+  const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
     message: result?.data?.message || result?.error || (ok ? 'Éclosion enregistrée' : 'Échec éclosion'),

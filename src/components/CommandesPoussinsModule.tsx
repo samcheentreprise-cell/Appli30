@@ -239,11 +239,11 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       const cmdDate = cmd.dateEclosion?.trim();
       if (!cmdDate) return;
 
-      const cmdType = (cmd.typeProduit || 'Chairs').trim().toLowerCase();
+      const cmdType = (cmd.typeProduit || 'Chairs').trim()?.toLowerCase();
 
       // Find matching hatching for this date and type
       const matching = Object.values(datesMap).find(
-        (item) => item.date === cmdDate && (item.type.toLowerCase() === cmdType || (item.race && item.race.toLowerCase() === cmdType))
+        (item) => item.date === cmdDate && (item.type?.toLowerCase() === cmdType || (item.race && item.race?.toLowerCase() === cmdType))
       );
 
       if (matching) {
@@ -267,7 +267,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             })
           : cmdDate;
 
-        const key = `${cmdDate}___${rawType.toLowerCase()}`;
+        const key = `${cmdDate}___${rawType?.toLowerCase()}`;
         if (!datesMap[key]) {
           datesMap[key] = {
             id: key,
@@ -327,10 +327,10 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   const selectedHatchDate = useMemo(() => {
     return (
       activeHatchDates.find(
-        (d) => d.date === selDateKey && d.type.toLowerCase() === selType.toLowerCase()
+        (d) => d.date === selDateKey && d.type?.toLowerCase() === selType?.toLowerCase()
       ) ||
       activeHatchDates.find((d) => d.date === selDateKey) ||
-      activeHatchDates[0]
+      (activeHatchDates.length > 0 ? activeHatchDates[0] : null)
     );
   }, [activeHatchDates, selDateKey, selType]);
 
@@ -358,22 +358,22 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
 
   // Filtered clients for selection
   const filteredClients = useMemo(() => {
-    const q = clientSearch.toLowerCase().trim();
+    const q = clientSearch?.toLowerCase().trim();
     if (!q) return clients;
     return clients.filter(
       (c) =>
-        c.label.toLowerCase().includes(q) ||
+        c.label?.toLowerCase().includes(q) ||
         (c.telephone && c.telephone.includes(q)) ||
-        (c.ville && c.ville.toLowerCase().includes(q))
+        (c.ville && c.ville?.toLowerCase().includes(q))
     );
   }, [clients, clientSearch]);
 
   // Filtered orders for "Chercher"
   const filteredCommandes = useMemo(() => {
-    const q = searchTerm.toLowerCase().trim();
+    const q = searchTerm?.toLowerCase().trim();
     if (!q) return commandes;
     return commandes.filter((c) => {
-      const full = `${c.id} ${c.prenom} ${c.nom} ${c.ville || ''} ${c.tel || ''}`.toLowerCase();
+      const full = `${c.id} ${c.prenom} ${c.nom} ${c.ville || ''} ${c.tel || ''}`?.toLowerCase();
       return full.includes(q);
     });
   }, [commandes, searchTerm]);
@@ -407,7 +407,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   };
 
   // Submit Order
-  const handleSaveCommande = () => {
+  const handleSaveCommande = async () => {
     if (!selDateKey) {
       showNotif("Veuillez sélectionner une date d'éclosion.", false);
       return;
@@ -421,10 +421,18 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       return;
     }
 
+    // ✅ Forcer un prix valide si le prix chargé est 0 ou invalide
+    const prixFromHatch = selectedHatchDate?.prix;
+    const prixFromFParam = getPriceForType(selType || 'Chairs');
+    const prixFinal = (prixFromHatch && prixFromHatch > 0)
+      ? prixFromHatch
+      : (prixFromFParam > 0 ? prixFromFParam : 700);
+    const montantTotalFinal = quantite * prixFinal;
+
     const available = selectedHatchDate ? selectedHatchDate.prevision - selectedHatchDate.commande : 0;
-    if (quantite > available) {
+    if (quantite > available && available > 0) {
       showNotif(
-        `Stock insuffisant : il ne reste que ${Math.max(0, available).toLocaleString('fr-FR')} place(s) pour cette date.`,
+        `Stock insuffisant : il ne reste que ${available.toLocaleString('fr-FR')} place(s) pour cette date.`,
         false
       );
       return;
@@ -446,24 +454,41 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       typeProduit,
       dateEclosion: selDateKey,
       quantite,
-      prixUnitaire,
-      total: montantTotal,
+      prixUnitaire: prixFinal,
+      total: montantTotalFinal,
       statut: 'En attente',
       notes,
       receptionnaire: currentUser?.username || 'Système',
     };
 
+    // ✅ NE PAS pousser vers GAS ici — App.tsx (handleAddCommandePoussin) s'en charge
+    //    pour éviter un DOUBLE PUSH qui causait STOCK_INSUFFISANT au 2e push.
     onAddCommande(newCmd);
+
+    // ✅ Calculer la date de livraison = dateEclosion + 1 jour
+    const calculerDateLivraison = (dateEclosionStr: string): string => {
+      try {
+        const parts = dateEclosionStr.split('/');
+        if (parts.length !== 3) return dateEclosionStr;
+        const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+        d.setDate(d.getDate() + 1);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
+      } catch {
+        return dateEclosionStr;
+      }
+    };
+    const dateLivraison = calculerDateLivraison(selDateKey);
 
     // Prepare WhatsApp links
     const cleanTel = (selClient.telephone || '').replace(/[^0-9]/g, '');
     const waPhone = cleanTel.startsWith('223') ? cleanTel : `223${cleanTel}`;
     const clientMsg = encodeURIComponent(
-      `Bonjour ${selClient.prenom} ${selClient.nom},\n\nVotre commande de poussins a bien été enregistrée !\n\nRéférence : ${id}\nType : ${typeProduit}\nQuantité : ${quantite} poussin(s)\nMontant total : ${montantTotal.toLocaleString('fr-FR')} F CFA\nDate d'éclosion : ${selDateKey}\n\nMerci de votre confiance !\nCOUVOIR SAMCHE`
+      `🐔 *COUVOIR SAMCHE* 🐔\n\nBonjour *${selClient.prenom} ${selClient.nom}* ✨\n\nVotre commande de poussins a bien été enregistrée ! 🎉\n\n📋 *Détails de la commande :*\n• Référence : ${id}\n• Type : ${typeProduit}\n• Quantité : ${quantite} poussin(s)\n• Prix unitaire : ${prixFinal} F CFA\n• *TOTAL : ${montantTotalFinal.toLocaleString('fr-FR')} F CFA* 💰\n\n📅 *Date d'éclosion : ${selDateKey}* 🥚\n🚚 *Date de livraison : ${dateLivraison}* 📦\n\n💳 *Instructions de paiement :*\n• Banque : BNDA, BDM, Coris Bank\n\n📍 *Adresse du couvoir :*\nBamako, Mali\n\n📞 *Contact :*\n• +223 66 56 50 55\n• +223 66 71 97 17\n\nMerci de votre confiance ! 🙏\n_Le Couvoir SAMCHE_`
     );
     const waClientLink = waPhone ? `https://wa.me/${waPhone}?text=${clientMsg}` : '';
     const gestMsg = encodeURIComponent(
-      `Nouvelle commande enregistrée !\n\nRéférence : ${id}\nClient : ${selClient.prenom} ${selClient.nom}\nTél : ${selClient.telephone}\nQuantité : ${quantite} poussin(s)\nTotal : ${montantTotal.toLocaleString('fr-FR')} F CFA\nÉclosion : ${selDateKey}\n\nCOUVOIR SAMCHE`
+      `🔔 *NOUVELLE COMMANDE* 🐔\n\n📋 *Référence : ${id}*\n👤 *Client : ${selClient.prenom} ${selClient.nom}*\n📞 *Tél : ${selClient.telephone}*\n📍 *Ville : ${selClient.ville || 'N/A'}*\n\n📦 *Détails :*\n• Type : ${typeProduit}\n• Quantité : ${quantite} poussin(s)\n• Prix unitaire : ${prixFinal} F CFA\n• *TOTAL : ${montantTotalFinal.toLocaleString('fr-FR')} F CFA* 💰\n\n📅 *Éclosion : ${selDateKey}* 🥚\n🚚 *Livraison : ${dateLivraison}* 📦\n\n_COUVOIR SAMCHE_`
     );
     const waGestLink = `https://wa.me/22366565055?text=${gestMsg}`;
 
@@ -840,7 +865,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                         </div>
                         <div className="text-xs font-bold text-[#1a5276] uppercase tracking-wide mt-0.5 flex items-center gap-1.5">
                           <span>{d.type}</span>
-                          {d.race && d.race.toLowerCase() !== d.type.toLowerCase() && (
+                          {d.race && d.race?.toLowerCase() !== d.type?.toLowerCase() && (
                             <span className="text-slate-500 font-normal">({d.race})</span>
                           )}
                           {d.lotId && (
@@ -947,7 +972,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {hatchDatesData.map((d, idx) => {
-                  const isSelected = selDateKey === d.date && selType.toLowerCase() === d.type.toLowerCase();
+                  const isSelected = selDateKey === d.date && selType?.toLowerCase() === d.type?.toLowerCase();
                   const dispo = Math.max(0, d.prevision - d.commande);
                   const palette = HATCH_COLOR_PALETTES[idx % HATCH_COLOR_PALETTES.length];
 
@@ -976,7 +1001,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                         )}
                       </div>
                       <div className="text-xs font-bold text-white mt-1 uppercase tracking-wide">
-                        {d.type} {d.race && d.race.toLowerCase() !== d.type.toLowerCase() ? `(${d.race})` : ''}
+                        {d.type} {d.race && d.race?.toLowerCase() !== d.type?.toLowerCase() ? `(${d.race})` : ''}
                       </div>
                       <div className="text-[11px] font-medium text-white/90 mt-1 flex items-center justify-between">
                         <span>{dispo.toLocaleString('fr-FR')} place(s)</span>
@@ -1012,7 +1037,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                   {/* Clients List */}
                   <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                     {filteredClients.slice(0, 4).map((c, i) => {
-                      const ini = `${(c.prenom[0] || '').toUpperCase()}${(c.nom[0] || '').toUpperCase()}`;
+                      const ini = `${(c.prenom?.[0] || '').toUpperCase()}${(c.nom?.[0] || '').toUpperCase()}`;
 
                       return (
                         <div
@@ -1051,7 +1076,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                 <div className="p-3 bg-gradient-to-r from-[#d5dce3] to-[#e8ecf1] rounded-xl flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center">
-                      {(selClient.prenom[0] || 'C') + (selClient.nom[0] || '')}
+                      {(selClient.prenom?.[0] || 'C') + (selClient.nom?.[0] || '')}
                     </div>
                     <div>
                       <div className="font-bold text-sm text-slate-800">{selClient.label}</div>

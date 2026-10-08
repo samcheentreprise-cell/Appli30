@@ -140,8 +140,13 @@ export default function App() {
   const handleAddOAC = async (newOac: OAC) => {
     setOacList((prev) => [newOac, ...prev]);
     const res = await syncPushToGoogleSheets({ type: 'oac', action: 'insert', item: newOac });
+    console.log('[App] Réponse push OAC:', res);
     if (res.success) {
-      handleTriggerSync();
+      console.log('[App] ✅ OAC enregistrée:', newOac.id);
+    } else {
+      console.error('[App] ❌ Push OAC échoué:', res);
+      setOacList((prev) => prev.filter((o) => o.id !== newOac.id));
+      alert(`Échec de l'enregistrement de l'OAC:\n${res.message}\n\nL'OAC a été retirée.`);
     }
   };
 
@@ -149,18 +154,34 @@ export default function App() {
     updated: OAC,
     subAction?: 'commander' | 'mirer' | 'eclore'
   ) => {
+    const previous = oacList.find((o) => o.id === updated.id);
     setOacList((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     const res = await syncPushToGoogleSheets({ type: 'oac', action: 'update', subAction, item: updated });
+    console.log('[App] Réponse push OAC update:', res);
     if (res.success) {
-      handleTriggerSync();
+      console.log('[App] ✅ OAC modifiée:', updated.id);
+    } else {
+      console.error('[App] ❌ Push OAC update échoué:', res);
+      if (previous) {
+        setOacList((prev) => prev.map((item) => (item.id === updated.id ? previous : item)));
+      }
+      alert(`Échec de la modification:\n${res.message}`);
     }
   };
 
   const handleDeleteOAC = async (id: string) => {
+    const deleted = oacList.find((o) => o.id === id);
     setOacList((prev) => prev.filter((item) => item.id !== id));
     const res = await syncPushToGoogleSheets({ type: 'oac', action: 'delete', item: { id } });
+    console.log('[App] Réponse push OAC delete:', res);
     if (res.success) {
-      handleTriggerSync();
+      console.log('[App] ✅ OAC supprimée:', id);
+    } else {
+      console.error('[App] ❌ Push OAC delete échoué:', res);
+      if (deleted) {
+        setOacList((prev) => [deleted, ...prev]);
+      }
+      alert(`Échec de la suppression:\n${res.message}`);
     }
   };
 
@@ -657,8 +678,12 @@ export default function App() {
         <>
           {/* Top Header */}
           <Header
+            currentUser={currentUser}
+            onLogout={() => {
+              setIsLoggedIn(false);
+              setCurrentUser(null);
+            }}
             currentRole={currentRole}
-            setCurrentRole={setCurrentRole}
             syncStatus={syncStatus}
             onTriggerSync={() => setSyncModalOpen(true)}
             activeTab={activeTab}

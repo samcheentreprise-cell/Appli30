@@ -7,6 +7,8 @@ import { PWAInstallButton } from './PWAInstallButton';
 
 // ... HeaderProps interface (remove currentRole, setCurrentRole if not used)
 interface HeaderProps {
+  currentUser: {username: string, role: UserRole} | null;
+  onLogout: () => void;
   currentRole: UserRole;
   syncStatus: { syncing: boolean; lastSync: string; error?: string };
   onTriggerSync: () => void;
@@ -17,6 +19,8 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  currentUser,
+  onLogout,
   currentRole,
   syncStatus,
   onTriggerSync,
@@ -72,6 +76,19 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+            {/* User Info & Logout */}
+            <div className="flex items-center gap-3 bg-sky-900/50 px-3 py-1.5 rounded-xl border border-sky-800/50">
+              <span className="text-xs font-bold text-amber-300">
+                {currentUser?.username}
+              </span>
+              <button
+                onClick={onLogout}
+                className="text-[10px] font-bold bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 rounded-lg transition"
+              >
+                Quitter
+              </button>
+            </div>
+
             {/* Sync Indicator - Visible for admin only */}
             <div className="flex items-center gap-2">
               {currentRole === 'admin' && (
