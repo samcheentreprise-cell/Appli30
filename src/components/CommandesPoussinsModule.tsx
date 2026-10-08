@@ -422,9 +422,9 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     }
 
     const available = selectedHatchDate ? selectedHatchDate.prevision - selectedHatchDate.commande : 0;
-    if (quantite > available && available > 0) {
+    if (quantite > available) {
       showNotif(
-        `Stock insuffisant : il ne reste que ${available.toLocaleString('fr-FR')} place(s) pour cette date.`,
+        `Stock insuffisant : il ne reste que ${Math.max(0, available).toLocaleString('fr-FR')} place(s) pour cette date.`,
         false
       );
       return;

@@ -429,7 +429,10 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
   }
 
   const result = await callApi(gasAction, data, 'POST');
-  const ok = result?.success && result?.data?.succes !== false;
+  // ✅ Vérifier les deux orthographes (succes FR + success EN)
+  // Certaines fonctions GAS retournent "succes" (FR), d'autres "success" (EN)
+  const innerSuccess = result?.data?.succes !== false && result?.data?.success !== false;
+  const ok = !!result?.success && innerSuccess;
   return {
     success: ok,
     message: result?.data?.message || result?.error || (ok ? 'Écriture OK' : 'Écriture échouée'),

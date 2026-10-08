@@ -460,14 +460,34 @@ export default function App() {
   };
 
   const handleAddCommandePoussin = async (cmd: CommandePoussin) => {
-    setCommandesPoussins((prev) => [cmd, ...prev]);
-    const res = await syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'insert', item: cmd });
-    if (!res.success) {
-      console.error('[CommandePoussin] sync failed:', res.message);
-      // Optional: Revert the optimistic update if sync failed
-      setCommandesPoussins((prev) => prev.filter(c => c.id !== cmd.id));
-    }
-  };
+  setCommandesPoussins((prev) => [cmd, ...prev]);
+
+  const res = await syncPushToGoogleSheets({
+    type: 'commandes_poussins' as any,
+    action: 'insert',
+    item: {
+      dateEclosion: cmd.dateEclosion,
+      prenom: cmd.prenom,
+      nom: cmd.nom,
+      ville: cmd.ville || '',
+      tel: cmd.tel || '',
+      email: cmd.email || '',
+      quantite: cmd.quantite,
+      prix: cmd.prixUnitaire,
+      notes: cmd.notes || '',
+      typeProduit: cmd.typeProduit,
+    },
+  });
+
+  if (res.success) {
+    // ✅ NE PAS appeler handleTriggerSync() — évite la race condition
+    console.log('[App] ✅ Commande enregistrée:', cmd.id);
+  } else {
+    console.error('[App] ❌ Push commande échoué:', res);
+    setCommandesPoussins((prev) => prev.filter((c) => c.id !== cmd.id));
+    alert(`Échec de l'enregistrement:\n${res.message}\n\nLa commande a été retirée.`);
+  }
+};
 
   const handleUpdateCommandePoussin = async (updated: CommandePoussin) => {
     setCommandesPoussins((prev) =>
