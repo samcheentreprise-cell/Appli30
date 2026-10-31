@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Facture, Client, Bordereau, FactureLigne, BordereauLigne } from '../types';
+import { Facture, Client, Bordereau, FactureLigne, BordereauLigne, UserRole } from '../types';
 import { getFParamData } from '../services/googleSheet';
 
 interface FacturesModuleProps {
@@ -14,6 +14,7 @@ interface FacturesModuleProps {
   onUpdateClient?: (client: Client) => void;
   onDeleteClient?: (index: number) => void;
   onClose?: () => void;
+  role: UserRole;
 }
 
 export const FacturesModule: React.FC<FacturesModuleProps> = ({
@@ -28,6 +29,7 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
   onUpdateClient,
   onDeleteClient,
   onClose,
+  role,
 }) => {
   // Active Tab: 'f' | 'b' | 's' | 'mc' | 'cb'
   const [activeTab, setActiveTab] = useState<'f' | 'b' | 's' | 'mc' | 'cb'>('f');
@@ -1629,14 +1631,16 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                 <span className="font-extrabold text-xs uppercase tracking-wider text-[#1a3050]">
                   📊 CAHIER DE BORD — FACTURES
                 </span>
-                <button
-                  type="button"
-                  onClick={() => showMsg('Données actualisées.', true)}
-                  className="px-3 py-1 rounded-lg text-xs font-bold border border-[#c8a850] text-[#1a3050] hover:bg-[#c8a850]/10 transition flex items-center gap-1"
-                >
-                  <span>↺</span>
-                  <span>Actualiser</span>
-                </button>
+                {role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => showMsg('Données actualisées.', true)}
+                    className="px-3 py-1 rounded-lg text-xs font-bold border border-[#c8a850] text-[#1a3050] hover:bg-[#c8a850]/10 transition flex items-center gap-1"
+                  >
+                    <span>↺</span>
+                    <span>Actualiser</span>
+                  </button>
+                )}
               </div>
 
               {/* 8 KPI Cards Grid (4 columns × 2 rows) - Screenshot 4 */}

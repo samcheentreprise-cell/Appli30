@@ -3,6 +3,7 @@ export interface OAC {
   ligne?: number;
   id: string;
   date: string;
+  dateIncubation?: string;
   type: string;
   race: string;
   fournisseur: string;
@@ -22,6 +23,13 @@ export interface OAC {
   complet?: boolean;
   notes?: string;
   statut?: string;
+  attendus?: number;
+  tauxEclosion?: number;
+  tauxIncubation?: number;
+  verrouillee?: boolean;
+  validePar?: string;
+  valideLe?: string;
+  idCommande?: string;
 }
 
 export interface SoumissionEnAttente {
@@ -103,6 +111,8 @@ export interface Vente {
   statutPaiement: 'Payee' | 'Avance' | 'Non payee';
   avance: number;
   reliquat: number;
+  reductionType?: 'Fixe' | 'Pourcentage';
+  reductionValeur?: number;
 }
 
 export interface Depense {
@@ -180,3 +190,25 @@ export interface Bordereau {
 }
 
 export type UserRole = 'admin' | 'utilisateur' | 'comptable';
+
+// ============================================================
+// ✅ PATCH NOTIFICATIONS ADMIN
+// Représente une notification destinée aux administrateurs
+// (créée à chaque saisie opérateur : Commande, Mirage, Éclosion,
+//  ou correction d'une soumission rejetée).
+// ============================================================
+export interface AdminNotification {
+  id: string;                  // ID unique (ex: NOT-20261015-093045-abc1234)
+  date: string;                // Date ISO ou fr-FR (jj/mm/aaaa)
+  heure?: string;              // Heure HH:MM:SS
+  type: 'Commande' | 'Mirage' | 'Éclosion' | 'Correction' | 'Info';
+  titre: string;               // Sujet court (ex: "Nouvelle commande en attente")
+  message: string;             // Corps du message (détails)
+  auteur: string;              // Utilisateur qui a déclenché la notif
+  role: UserRole;              // Rôle de l'auteur
+  idSoumission?: string;       // Référence à la soumission liée
+  idLot?: string;              // ID OAC concerné (pour Mirage/Éclosion)
+  lue?: boolean;               // Si true, l'admin a marqué comme lu
+  statut: 'nouveau' | 'lu' | 'archivé';
+  emailEnvoye?: boolean;       // Si true, l'email a bien été envoyé
+}

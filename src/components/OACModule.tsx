@@ -3,18 +3,199 @@ import { OAC, SoumissionEnAttente, UserRole } from '../types';
 import { TYPES_OAC, RACES_OAC, FOURNISSEURS_OAC } from '../data/initialData';
 import { playAlertSound } from '../utils/audio';
 import { DiagnosticLogModal } from './DiagnosticLogModal';
-import { getOacLogs, getOacConfig, getFParamData } from '../services/googleSheet';
+import { getOacLogs, getOacConfig, getFParamData, sendAdminNotificationEmail } from '../services/googleSheet';
+
+// ✅ PATCH RÈGLES DE GESTION — Import des composants de verrouillage
+// Permet d'afficher le badge 🔒, le bouton "Valider" et de désactiver
+// les boutons Modifier/Mirer/Éclore/Supprimer sur les lignes verrouillées.
+//
+// ✅ FIX v2 — On importe aussi estVerrouillee pour faire un appel direct
+//    au backend au chargement du composant. Cela contourne le problème si
+//    le service googleSheet.ts ne transmet pas le champ `verrouillee`
+//    (qui est renvoyé par le backend mais peut être filtré par le mapper
+//    de oacList côté frontend).
+import {
+  OacLockButton,
+  estVerrouillee,
+} from '../lib/oacRules';
+
+// ✅ CORRECTION : envoi via le backend GAS (MailApp natif).
+//    L'ancien appel à '/api/send-email' ne fonctionnait qu'en local
+//    (route définie dans server.ts) → aucun mail en production.
+// ✅ ANOMALIE CORRIGÉE : plus de lecture de `alert_emails` dans
+//    localStorage. Les destinataires sont désormais configurés
+//    côté serveur (Google Apps Script → Project Settings →
+//    Script Properties → clé `emails_admins`). GAS utilise
+//    automatiquement cette config quand on ne passe pas de
+//    destinataires.
+const sendAdminNotification = async (subject: string, text: string) => {
+  try {
+    // On ne passe pas de destinataires : GAS utilise sa config server-side
+    await sendAdminNotificationEmail(subject, text);
+  } catch (error) {
+    console.error('Failed to send notification email', error);
+  }
+};
+
+// Helper: Vérifie si l'OAC est modifiable selon les règles métiers
+const checkOACRestriction = (
+  oac: OAC | undefined | null,
+  role: UserRole,
+  type: 'Commande' | 'Mirage' | 'Eclosion',
+  soumissions: SoumissionEnAttente[]
+) => {
+  // Seuls les administrateurs ont tous les droits de modification
+  if (role === 'admin') return { allowed: true, reason: '' };
+  if (!oac) return { allowed: true, reason: '' };
+
+  // Règle 1 : Commande explicitement verrouillée par validation admin
+  if ((oac as any).verrouillee) {
+    return {
+      allowed: false,
+      reason: `Commande verrouillée par validation admin (${(oac as any).validePar || 'admin'}). Seuls les administrateurs peuvent la modifier.`,
+    };
+  }
+
+  // Règle métier : Une fois les données validées et le statut en incubation, les données des commandes
+  // ne peuvent pas être modifiées par un utilisateur, de même si le statut est miré ou éclos.
+  // Seuls les administrateurs peuvent les modifier.
+  if (type === 'Commande') {
+    const rawSt = String(oac.statut || '').trim().toLowerCase();
+    const isEclos = rawSt.includes('eclos') || rawSt.includes('éclos');
+    const isMire = rawSt.includes('mir');
+    const isIncubation = rawSt.includes('incubation') || !rawSt;
+    const isValidated = soumissions.some(
+      (s) => (s.donnees?.id === oac.id || s.idSoumission === oac.id) && s.statut === 'Approuvé'
+    );
+
+    if (isEclos) {
+      return {
+        allowed: false,
+        reason: 'Ce lot est au statut Éclos. Les données de la commande ne peuvent pas être modifiées par un utilisateur. Seuls les administrateurs sont autorisés à les modifier.',
+      };
+    }
+    if (isMire) {
+      return {
+        allowed: false,
+        reason: 'Ce lot est au statut Miré. Les données de la commande ne peuvent pas être modifiées par un utilisateur. Seuls les administrateurs sont autorisés à les modifier.',
+      };
+    }
+    if (isIncubation || isValidated || (oac as any).verrouillee) {
+      return {
+        allowed: false,
+        reason: 'Ce lot a été validé et est en incubation. Les données de la commande ne peuvent pas être modifiées par un utilisateur. Seuls les administrateurs sont autorisés à les modifier.',
+      };
+    }
+    return { allowed: true, reason: '' };
+  }
+
+  // Contrôles spécifiques Mirage pour utilisateur standard
+  if (type === 'Mirage') {
+    const rawSt = String(oac.statut || '').trim().toLowerCase();
+    if (rawSt.includes('eclos') || rawSt.includes('éclos')) {
+      return {
+        allowed: false,
+        reason: 'Ce lot est au statut Éclos. L\'étape de mirage est terminée. Seuls les administrateurs peuvent la modifier.',
+      };
+    }
+    const isMirageValidated = soumissions.some(
+      (s) => s.type === 'Mirage' && (s.donnees?.id === oac.id || s.idSoumission === oac.id) && s.statut === 'Approuvé'
+    );
+    if (isMirageValidated) {
+      return {
+        allowed: false,
+        reason: 'Les données de mirage ont déjà été validées par un administrateur. Seuls les administrateurs peuvent les modifier.',
+      };
+    }
+  }
+
+  // Contrôles spécifiques Éclosion pour utilisateur standard
+  if (type === 'Eclosion') {
+    const isEclosionValidated = soumissions.some(
+      (s) => (s.type === 'Éclosion' || (s.type as string) === 'Eclosion') && (s.donnees?.id === oac.id || s.idSoumission === oac.id) && s.statut === 'Approuvé'
+    );
+    if (isEclosionValidated) {
+      return {
+        allowed: false,
+        reason: 'Les données d\'éclosion ont déjà été validées par un administrateur. Seuls les administrateurs peuvent les modifier.',
+      };
+    }
+  }
+
+  const parseDateSafe = (dStr?: string): Date | null => {
+    if (!dStr) return null;
+    const trimmed = dStr.trim();
+    if (trimmed.includes('/')) {
+      const parts = trimmed.split('/');
+      if (parts.length === 3) {
+        return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      }
+    }
+    if (trimmed.includes('-')) {
+      const parts = trimmed.split('-');
+      if (parts.length === 3) {
+        return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      }
+    }
+    const d = new Date(trimmed);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const eclosionDate = parseDateSafe(oac.eclosion);
+  if (!eclosionDate) return { allowed: true, reason: '' };
+
+  if (type === 'Mirage') {
+    // Règle 2 : Fenêtre Mirage (J+18 = 3 jours avant éclosion à J+21)
+    const mirageLimit = new Date(eclosionDate);
+    mirageLimit.setDate(mirageLimit.getDate() - 3);
+    if (today > mirageLimit) {
+      return { allowed: false, reason: 'Fenêtre de mirage dépassée (date limite : 3 jours avant éclosion).' };
+    }
+  } else if (type === 'Eclosion') {
+    // Règle 3 : Fenêtre Éclosion (J+21 jusqu'à J+22 max)
+    const oneDayAfter = new Date(eclosionDate);
+    oneDayAfter.setDate(oneDayAfter.getDate() + 2);
+    const startWindow = new Date(eclosionDate);
+    startWindow.setDate(startWindow.getDate() - 1);
+    if (today < startWindow) {
+      return { allowed: false, reason: `Fenêtre d'éclosion pas encore ouverte (prévue le ${oac.eclosion}).` };
+    }
+    if (today > oneDayAfter) {
+      return { allowed: false, reason: 'Fenêtre d\'éclosion fermée (dépassée).' };
+    }
+  }
+
+  return { allowed: true, reason: '' };
+};
+
+// ✅ PATCH RÈGLES DE GESTION — Helper pour vérifier le verrouillage OAC
+// ⚠️ NOTE : La version finale de isOacLocked est définie À L'INTÉRIEUR du
+//    composant OACModule (plus bas) car elle utilise le state `lockedOacs`
+//    qui est peuplé via des appels API au chargement.
+//    Cette version module-level est un fallback statique qui ne vérifie que
+//    le champ direct `verrouillee` (utile pour checkOACRestriction qui est
+//    aussi module-level).
+const isOacLockedStatic = (oac: OAC | undefined | null): boolean => {
+  return !!(oac && (oac as any).verrouillee);
+};
 
 interface OACModuleProps {
   oacList: OAC[];
   soumissions: SoumissionEnAttente[];
+  depenses: Depense[];
   onAddOAC: (oac: OAC) => void;
   onUpdateOAC: (oac: OAC, subAction?: 'commander' | 'mirer' | 'eclore') => void;
   onDeleteOAC: (id: string) => void;
-  onAddSoumission: (soumission: SoumissionEnAttente) => void;
-  onApproveSoumission: (idSoumission: string, idChoisi: string, donneesModifiees?: any) => void;
-  onRejectSoumission: (idSoumission: string, raison: string) => void;
-  onUpdateSoumission?: (soumission: SoumissionEnAttente) => void;
+  // ✅ Les handlers deviennent async pour permettre l'attente de
+  //    l'enregistrement côté GAS avant d'afficher le toast de succès.
+  onAddSoumission: (soumission: SoumissionEnAttente) => Promise<void> | void;
+  onApproveSoumission: (idSoumission: string, idChoisi: string, donneesModifiees?: any) => Promise<void> | void;
+  onRejectSoumission: (idSoumission: string, raison: string) => Promise<void> | void;
+  onUpdateSoumission?: (soumission: SoumissionEnAttente) => Promise<void> | void;
+  onDeleteSoumission?: (idSoumission: string) => Promise<void> | void;
   onRefreshSoumissions?: () => void;
   role: UserRole;
   currentUser: {username: string, role: UserRole} | null;
@@ -24,6 +205,7 @@ interface OACModuleProps {
 export const OACModule: React.FC<OACModuleProps> = ({
   oacList,
   soumissions,
+  depenses,
   onAddOAC,
   onUpdateOAC,
   onDeleteOAC,
@@ -31,6 +213,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   onApproveSoumission,
   onRejectSoumission,
   onUpdateSoumission,
+  onDeleteSoumission,
   onRefreshSoumissions,
   role,
   currentUser,
@@ -53,19 +236,78 @@ export const OACModule: React.FC<OACModuleProps> = ({
       console.log('[OAC] F-Param chargé:', fp);
     })();
   }, []);
-  // Main two tabs: 'validation' (default) vs 'cycle' (Commandes, Mirage, Eclosions)
-  const [mainTab, setMainTab] = useState<'validation' | 'cycle'>(role === 'admin' ? 'validation' : 'cycle');
-  const [tabActif, setTabActif] = useState<0 | 1 | 2>(0);
+
+  // Main two tabs: 'validation' vs 'cycle' (Commandes, Mirage, Eclosions)
+  // Par défaut, ouverture sur 'cycle' pour afficher immédiatement le menu et la liste des commandes
+  const [mainTab, setMainTab] = useState<'validation' | 'cycle'>('cycle');
+  // Par défaut, aucun formulaire n'est ouvert à l'affichage : on affiche la listbox des dernières commandes sous le menu
+  const [tabActif, setTabActif] = useState<0 | 1 | 2 | null>(null);
+  const [overviewFilter, setOverviewFilter] = useState<'Tous' | 'En incubation' | 'Miré' | 'Éclos'>('Tous');
+  const [overviewSearch, setOverviewSearch] = useState('');
   const [soumissionFilter, setSoumissionFilter] = useState<'Tous' | 'En attente' | 'Approuvé' | 'Rejeté'>('Tous');
   const [soumissionSearch, setSoumissionSearch] = useState('');
+  // ✅ CORRECTION BUG SYNTAXE (était: `const sg, setMsg] = ...`)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   // Active correction mode for operator
   const [activeCorrection, setActiveCorrection] = useState<SoumissionEnAttente | null>(null);
 
+  // ✅ FIX v2 — State local pour l'état de verrouillage de chaque OAC.
+  // On peuple ce state via un appel direct à estVerrouillee(id) au chargement.
+  // Cela contourne le fait que le service googleSheet.ts peut ne pas transmettre
+  // le champ `verrouillee` renvoyé par le backend.
+  // Structure : { [oacId]: { locked: boolean, validePar?: string, valideLe?: string } }
+  const [lockedOacs, setLockedOacs] = useState<Record<string, { locked: boolean; validePar?: string; valideLe?: string }>>({});
+
   const pendingCount = soumissions.filter((s) => s.statut === 'En attente').length;
   const approvedCount = soumissions.filter((s) => s.statut === 'Approuvé').length;
   const rejectedCount = soumissions.filter((s) => s.statut === 'Rejeté').length;
+
+  // ✅ FIX v2 — Au chargement et à chaque changement de oacList, on interroge
+  //    le backend pour récupérer l'état de verrouillage de chaque OAC.
+  //    On utilise Promise.all pour paralléliser les appels.
+  useEffect(() => {
+    if (!oacList || oacList.length === 0) {
+      setLockedOacs({});
+      return;
+    }
+    let cancelled = false;
+
+    // Limiter à 100 OAC max pour éviter trop d'appels réseau
+    const idsToCheck = oacList.slice(0, 100).map((o) => o.id).filter(Boolean);
+
+    Promise.all(
+      idsToCheck.map(async (id) => {
+        try {
+          const r = await estVerrouillee(id);
+          if (r.success && r.data) {
+            return {
+              id,
+              info: {
+                locked: !!r.data.verrouillee,
+                validePar: r.data.validePar,
+                valideLe: r.data.valideLe,
+              },
+            };
+          }
+          return { id, info: { locked: false } };
+        } catch (e) {
+          return { id, info: { locked: false } };
+        }
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      const map: Record<string, { locked: boolean; validePar?: string; valideLe?: string }> = {};
+      results.forEach(({ id, info }) => {
+        map[id] = info;
+      });
+      setLockedOacs(map);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [oacList]);
 
   // Sound alert on operator phone when a new rejection arrives
   const prevRejectedCount = useRef(rejectedCount);
@@ -85,8 +327,43 @@ export const OACModule: React.FC<OACModuleProps> = ({
             .includes(soumissionSearch.toLowerCase().trim())
         : true;
       return matchFilter && matchSearch;
-    });
+    })
+    .sort((a, b) => {
+        const [d1, m1, y1] = a.dateSoumission.split('/').map(Number);
+        const [d2, m2, y2] = b.dateSoumission.split('/').map(Number);
+        return new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime();
+    })
+    .slice(0, 5);
   }, [soumissions, soumissionFilter, soumissionSearch]);
+
+  const recentOacList = useMemo(() => {
+    // 1. Dépenses "Achat d'œufs à couver"
+    const oacIdsFromDepenses = depenses
+      .filter((d) => d.sousCategorie === "Achat d'œufs à couver" && d.idCommande)
+      .map((d) => ({ id: d.idCommande!, date: d.date }));
+
+    // 2. IDs de oacList (déjà existants)
+    const oacIdsFromOacList = oacList.map((o) => ({ id: o.id, date: o.date }));
+
+    // 3. Fusionner et garder les plus récents (unique IDs)
+    const allIds = [...oacIdsFromDepenses, ...oacIdsFromOacList];
+    const uniqueIdsMap = new Map<string, string>();
+    allIds.forEach((item) => {
+      if (!uniqueIdsMap.has(item.id)) {
+        uniqueIdsMap.set(item.id, item.date);
+      }
+    });
+
+    // 4. Convertir en tableau et trier
+    return Array.from(uniqueIdsMap.entries())
+      .map(([id, date]) => ({ id, date }))
+      .sort((a, b) => {
+        const [dA, mA, yA] = a.date.split('/').map(Number);
+        const [dB, mB, yB] = b.date.split('/').map(Number);
+        return new Date(yB, mB - 1, dB).getTime() - new Date(yA, mA - 1, dA).getTime();
+      })
+      .slice(0, 5);
+  }, [oacList, depenses]);
 
   // Selected IDs in tables
   const [selC, setSelC] = useState<string>('');
@@ -101,13 +378,16 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const [cType, setCType] = useState<string>('Chairs');
   const [cCar, setCCar] = useState<string>('');
   const [cCas, setCCas] = useState<string>('');
-  const [cJ21, setCJ21] = useState<boolean>(true);
+  // ✅ v1.3.8 : Remplace la case à cocher cJ21 par une date d'incubation obligatoire.
+  //   La date d'éclosion est calculée automatiquement = date d'incubation + 21 jours.
+  const [cDateIncub, setCDateIncub] = useState<string>(''); // format ISO yyyy-mm-dd
   const [cRace, setCRace] = useState<string>('Ross 308');
   const [cFourn, setCFourn] = useState<string>('Pak tavuk');
   const [cId, setCId] = useState<string>('');
   const [cLg, setCLg] = useState<number | undefined>(undefined);
 
   // Tab 2 : Mirage form state
+  // ✅ CORRECTION BUG SYNTAXE (était: `const Id, setMId] = ...` etc.)
   const [mId, setMId] = useState<string>('');
   const [mDateAff, setMDateAff] = useState<string>('');
   const [mCla, setMCla] = useState<string>('');
@@ -127,6 +407,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const [approveIdChoisi, setApproveIdChoisi] = useState<string>('');
   const [approveIdError, setApproveIdError] = useState(false);
   const [showRejectFormInModal, setShowRejectFormInModal] = useState(false);
+  // ✅ CORRECTION BUG SYNTAXE (était: `const odalRejectRaison, setModalRejectRaison] = ...`)
   const [modalRejectRaison, setModalRejectRaison] = useState('');
 
   // Rejection Prompt Modal state
@@ -139,19 +420,24 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const [deleteTargetId, setDeleteTargetId] = useState('');
   const [deleteType, setDeleteType] = useState<'commande' | 'mirage' | 'eclosion'>('commande');
 
+  // Confirmation Delete Soumission Modal (Admin)
+  const [deleteSoumissionConfirmOpen, setDeleteSoumissionConfirmOpen] = useState(false);
+  const [deleteSoumissionTarget, setDeleteSoumissionTarget] = useState<SoumissionEnAttente | null>(null);
+
   const showNotification = (text: string, ok: boolean) => {
     setMsg({ text, ok });
     setTimeout(() => setMsg(null), 5000);
   };
 
-  // Helper date calculation
-  const calculateEclosionDate = (dateISO: string, isJ21: boolean): string => {
-    if (!dateISO) return '';
+  // ✅ v1.3.8 : Helper pour calculer la date d'éclosion = date d'incubation + 21 jours
+  //   Retourne une string au format dd/mm/yyyy
+  const calculateEclosionDate = (dateIncubISO: string): string => {
+    if (!dateIncubISO) return '';
     try {
-      const parts = dateISO.split('-');
+      const parts = dateIncubISO.split('-');
       if (parts.length === 3) {
         const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-        d.setDate(d.getDate() + (isJ21 ? 21 : 22));
+        d.setDate(d.getDate() + 21); // ✅ Toujours +21 jours (la règle J+22 est supprimée)
         const day = String(d.getDate()).padStart(2, '0');
         const month = String(d.getMonth() + 1).padStart(2, '0');
         return `${day}/${month}/${d.getFullYear()}`;
@@ -180,6 +466,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
     setCCas(item.nbCasses !== undefined && item.nbCasses !== null ? String(item.nbCasses) : '');
     setCRace(item.race || '');
     setCFourn(item.fournisseur || '');
+    // ✅ v1.3.8 : Charger la date d'incubation depuis la ligne (si présente), sinon la déduire de la date d'éclosion - 21 jours
+    if ((item as any).dateIncubation) {
+      const partsInc = (item as any).dateIncubation.split('/');
+      if (partsInc.length === 3) {
+        setCDateIncub(`${partsInc[2]}-${partsInc[1]}-${partsInc[0]}`);
+      }
+    } else if (item.eclosion) {
+      // Rétrocompatibilité : déduire date incub = date éclosion - 21 jours
+      const partsEclo = item.eclosion.split('/');
+      if (partsEclo.length === 3) {
+        const dEclo = new Date(Number(partsEclo[2]), Number(partsEclo[1]) - 1, Number(partsEclo[0]));
+        dEclo.setDate(dEclo.getDate() - 21);
+        setCDateIncub(`${dEclo.getFullYear()}-${String(dEclo.getMonth() + 1).padStart(2, '0')}-${String(dEclo.getDate()).padStart(2, '0')}`);
+      }
+    }
   };
 
   const razC = () => {
@@ -193,7 +494,9 @@ export const OACModule: React.FC<OACModuleProps> = ({
     setCCas('');
     setCRace(oacConfig.races[0] || '');
     setCFourn(oacConfig.fournisseurs[0] || '');
-    setCJ21(true);
+    // ✅ v1.3.8 : Initialiser la date d'incubation à aujourd'hui
+    const di = new Date();
+    setCDateIncub(`${di.getFullYear()}-${String(di.getMonth() + 1).padStart(2, '0')}-${String(di.getDate()).padStart(2, '0')}`);
   };
 
   // Initialiser lors du chargement de la config
@@ -260,6 +563,82 @@ export const OACModule: React.FC<OACModuleProps> = ({
   };
 
   // -------------------------------------------------------------
+  // ✅ PATCH RÈGLES DE GESTION — Helper interne pour vérifier le verrouillage
+  // -------------------------------------------------------------
+  // Vérifie le verrouillage backend sur l'OAC.
+  // Utilise 2 sources :
+  //   1. Le champ direct `verrouillee` (si le service googleSheet.ts le transmet)
+  //   2. Le state local `lockedOacs` (peuplé via appels API estVerrouillee)
+  // Si l'une des deux sources dit "verrouillé", on considère l'OAC verrouillée.
+  const isOacLocked = (oac: OAC | undefined | null): boolean => {
+    if (!oac) return false;
+    // Source 1 : champ direct (si présent)
+    if ((oac as any).verrouillee) return true;
+    // Source 2 : state local peuplé via API
+    if (lockedOacs[oac.id]?.locked) return true;
+    return false;
+  };
+
+  // Helper pour récupérer "validePar" (qui a verrouillé) depuis les 2 sources
+  const getOacValidePar = (oac: OAC | undefined | null): string => {
+    if (!oac) return '';
+    if ((oac as any).validePar) return (oac as any).validePar;
+    if (lockedOacs[oac.id]?.validePar) return lockedOacs[oac.id]?.validePar;
+    const s = soumissions.find((x) => x.donnees?.id === oac.id && x.statut === 'Approuvé');
+    if (s) return 'validation admin';
+    return '';
+  };
+
+  // -------------------------------------------------------------
+  // ✅ PATCH RÈGLES DE GESTION — Helper interne pour bloquer si verrouillé
+  // -------------------------------------------------------------
+  // Vérifie le verrouillage backend sur l'OAC sélectionnée.
+  // Si verrouillée, affiche une notification et renvoie false.
+  const assertNotLocked = (id: string, actionLabel: string): boolean => {
+    const oac = oacList.find((o) => o.id === id);
+    if (!oac) return true;
+    if (role === 'admin') return true;
+
+    if (isOacLocked(oac)) {
+      const validePar = getOacValidePar(oac) || 'un administrateur';
+      showNotification(
+        `🔒 ${actionLabel} impossible : commande ${id} verrouillée par ${validePar}. Faites déverrouiller par un admin.`,
+        false
+      );
+      return false;
+    }
+
+    const typeToCheck = actionLabel === 'Mirage' ? 'Mirage' : actionLabel === 'Éclosion' ? 'Eclosion' : 'Commande';
+    const restriction = checkOACRestriction(oac, role, typeToCheck as any, soumissions);
+    if (!restriction.allowed) {
+      showNotification(`🔒 ${actionLabel} impossible : ${restriction.reason}`, false);
+      return false;
+    }
+
+    return true;
+  };
+
+  // ✅ FIX v2 — Helper pour rafraîchir l'état de verrouillage d'un OAC
+  // après une action de validation/déverrouillage (bouton OacLockButton)
+  const refreshOacLock = async (id: string) => {
+    try {
+      const r = await estVerrouillee(id);
+      if (r.success && r.data) {
+        setLockedOacs((prev) => ({
+          ...prev,
+          [id]: {
+            locked: !!r.data.verrouillee,
+            validePar: r.data.validePar,
+            valideLe: r.data.valideLe,
+          },
+        }));
+      }
+    } catch (e) {
+      // ignore silencieusement
+    }
+  };
+
+  // -------------------------------------------------------------
   // Save Handlers
   // -------------------------------------------------------------
   const handleSave = () => {
@@ -280,17 +659,39 @@ export const OACModule: React.FC<OACModuleProps> = ({
         showNotification('Veuillez sélectionner un fournisseur.', false);
         return;
       }
+      // ✅ v1.3.8 : Date d'incubation OBLIGATOIRE
+      if (!cDateIncub) {
+        showNotification('Veuillez renseigner la date d\'incubation (obligatoire).', false);
+        return;
+      }
 
       const cartonsNum = parseInt(cCar) || 0;
       const cassesNum = parseInt(cCas) || 0;
       const dateParts = cDt.split('-');
       const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
-      const eclosionDate = calculateEclosionDate(cDt, cJ21);
+      // ✅ v1.3.8 : Date d'éclosion CALCULÉE = date d'incubation + 21 jours
+      const eclosionDate = calculateEclosionDate(cDateIncub);
+      // Formatage de la date d'incubation au format dd/mm/yyyy pour le backend
+      const incubParts = cDateIncub.split('-');
+      const formattedDateIncub = incubParts.length === 3 ? `${incubParts[2]}/${incubParts[1]}/${incubParts[0]}` : cDateIncub;
       const totalRecus = cartonsNum * 360;
       const cubes = totalRecus - cassesNum;
 
-      // Operator Role: Always send to validation before integration into database
-      if (role !== 'admin') {
+      // Bloquer toute modification d'une commande existante par un utilisateur non-admin
+      if (selC && role !== 'admin') {
+        const selOac = oacList.find((o) => o.id === selC);
+        const restriction = checkOACRestriction(selOac, role, 'Commande', soumissions);
+        if (!restriction.allowed) {
+          showNotification(`🔒 Modification impossible : ${restriction.reason}`, false);
+          return;
+        }
+      }
+
+      // ✅ ANOMALIE CORRIGÉE — TOUS les utilisateurs (administrateurs compris)
+      //    doivent passer par la validation admin. Aucun enregistrement direct.
+      //    La soumission est mise en file d'attente et un email est envoyé aux
+      //    administrateurs via GAS (MailApp natif, fonctionne en production).
+      {
         const donnees = {
           date: cDt,
           type: cType,
@@ -298,9 +699,12 @@ export const OACModule: React.FC<OACModuleProps> = ({
           fournisseur: cFourn,
           cartons: cartonsNum,
           casses: cassesNum,
-          eclosion: eclosionDate,
+          // ✅ v1.3.8 : On envoie la DATE D'INCUBATION au backend (au lieu de la date d'éclosion)
+          //   Le backend la stockera en colonne AA et calculera lui-même la date d'éclosion (col J = AA + 21j)
+          dateIncubation: formattedDateIncub,
+          eclosion: eclosionDate, // conservé pour rétrocompatibilité
         };
-        const resume = `Commande ${cType} (${cRace}) - ${cartonsNum} cartons (${cFourn})`;
+        const resume = `Commande ${cType} (${cRace}) - ${cartonsNum} cartons (${cFourn}) - Incub. ${formattedDateIncub} → Éclo. ${eclosionDate}`;
 
         if (activeCorrection && activeCorrection.type === 'Commande') {
           const updated: SoumissionEnAttente = {
@@ -332,62 +736,22 @@ export const OACModule: React.FC<OACModuleProps> = ({
           };
           onAddSoumission(newSoumission);
           playAlertSound('success');
+          sendAdminNotification('Nouvelle commande en attente', `Une nouvelle commande a été soumise par ${newSoumission.soumisPar}: ${resume}`);
           showNotification('📨 Commande transmise à la validation administrateur avec succès. Elle sera intégrée dès son approbation.', true);
         }
         razC();
+        setTabActif(null);
         return;
       }
-
-      if (selC) {
-        // Modification Admin
-        const existing = oacList.find((x) => x.id === selC);
-        if (existing) {
-          const updated: OAC = {
-            ...existing,
-            date: formattedDate,
-            type: cType,
-            race: cRace,
-            fournisseur: cFourn,
-            cartons: cartonsNum,
-            recus: totalRecus,
-            nbCasses: cassesNum,
-            cubes,
-            eclosion: eclosionDate,
-          };
-          onUpdateOAC(updated, 'commander');
-          showNotification('Commande modifiée avec succès.', true);
-          razC();
-        }
-      } else {
-        // Nouvelle commande Admin
-        const newId = `OAC-2609-00${oacList.length + 1}`;
-        const newOac: OAC = {
-          _v: 25,
-          ligne: oacList.length + 3,
-          id: newId,
-          date: formattedDate,
-          type: cType,
-          race: cRace,
-          fournisseur: cFourn,
-          cartons: cartonsNum,
-          recus: totalRecus,
-          nbCasses: cassesNum,
-          cubes,
-          eclosion: eclosionDate,
-          clairs: null,
-          fertiles: cubes,
-          commerciaux: null,
-          pourVente: null,
-          handicapes: null,
-          morts: null,
-        };
-        onAddOAC(newOac);
-        showNotification('Commande enregistrée directement dans la base de données.', true);
-        razC();
-      }
+      // ℹ️ Le code d'enregistrement direct (admin) a été supprimé : toutes les
+      //    saisies passent désormais par la validation admin ci-dessus.
     } else if (tabActif === 1) {
       if (!mId) {
         showNotification('Veuillez sélectionner une ligne dans la liste.', false);
+        return;
+      }
+      // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage avant mirage
+      if (!assertNotLocked(mId, 'Mirage')) {
         return;
       }
       if (mCla === '') {
@@ -400,8 +764,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
         const cubes = existing.cubes || (existing.cartons * 360 - existing.nbCasses);
         const fertiles = Math.max(0, cubes - clairsNum);
 
-        // Operator Role: Send mirage declaration to validation
-        if (role !== 'admin') {
+        // ✅ ANOMALIE CORRIGÉE — TOUS les utilisateurs (administrateurs compris)
+        //    doivent passer par la validation admin. Aucun enregistrement direct.
+        //    La déclaration de mirage est mise en file d'attente et un email est
+        //    envoyé aux administrateurs via GAS (MailApp natif).
+        {
           const donnees = {
             id: mId,
             clairs: clairsNum,
@@ -439,24 +806,23 @@ export const OACModule: React.FC<OACModuleProps> = ({
             };
             onAddSoumission(newSoumission);
             playAlertSound('success');
+            sendAdminNotification('Nouveau mirage en attente', `Un nouveau mirage a été soumis par ${newSoumission.soumisPar}: ${resume}`);
             showNotification('📨 Déclaration de mirage transmise à la validation administrateur.', true);
           }
           razM();
+          setTabActif(null);
           return;
         }
-
-        const updated: OAC = {
-          ...existing,
-          clairs: clairsNum,
-          fertiles,
-        };
-        onUpdateOAC(updated, 'mirer');
-        showNotification('Données de mirage enregistrées directement dans la base.', true);
-        razM();
+        // ℹ️ Le code d'enregistrement direct (admin) a été supprimé : toutes les
+        //    saisies passent désormais par la validation admin ci-dessus.
       }
     } else if (tabActif === 2) {
       if (!eId) {
         showNotification('Veuillez sélectionner une éclosion dans la liste.', false);
+        return;
+      }
+      // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage avant éclosion
+      if (!assertNotLocked(eId, 'Éclosion')) {
         return;
       }
       if (eNes === '') {
@@ -480,8 +846,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
         const bonus = Math.ceil(commNum * 0.02);
         const pourVente = commNum - bonus;
 
-        // Operator Role: Send eclosion declaration to validation
-        if (role !== 'admin') {
+        // ✅ ANOMALIE CORRIGÉE — TOUS les utilisateurs (administrateurs compris)
+        //    doivent passer par la validation admin. Aucun enregistrement direct.
+        //    La déclaration d'éclosion est mise en file d'attente et un email est
+        //    envoyé aux administrateurs via GAS (MailApp natif).
+        {
           const donnees = {
             id: eId,
             commerciaux: commNum,
@@ -522,23 +891,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
             };
             onAddSoumission(newSoumission);
             playAlertSound('success');
+            sendAdminNotification('Nouvelle éclosion en attente', `Une nouvelle éclosion a été soumise par ${newSoumission.soumisPar}: ${resume}`);
             showNotification('📨 Déclaration d\'éclosion transmise à la validation administrateur.', true);
           }
           razE();
+          setTabActif(null);
           return;
         }
-
-        const updated: OAC = {
-          ...existing,
-          commerciaux: commNum,
-          nes: commNum,
-          handicapes: hanNum,
-          morts: morNum,
-          pourVente,
-        };
-        onUpdateOAC(updated, 'eclore');
-        showNotification("Données d'éclosion enregistrées directement dans la base.", true);
-        razE();
+        // ℹ️ Le code d'enregistrement direct (admin) a été supprimé : toutes les
+        //    saisies passent désormais par la validation admin ci-dessus.
       }
     }
   };
@@ -549,16 +910,20 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const handleDeleteClick = () => {
     if (tabActif === 0) {
       if (!selC) return;
+      // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage avant suppression
+      if (!assertNotLocked(selC, 'Suppression de commande')) return;
       setDeleteTargetId(selC);
       setDeleteType('commande');
       setDeleteConfirmOpen(true);
     } else if (tabActif === 1) {
       if (!selM) return;
+      if (!assertNotLocked(selM, 'Suppression de mirage')) return;
       setDeleteTargetId(selM);
       setDeleteType('mirage');
       setDeleteConfirmOpen(true);
     } else if (tabActif === 2) {
       if (!selE) return;
+      if (!assertNotLocked(selE, 'Suppression d\'éclosion')) return;
       setDeleteTargetId(selE);
       setDeleteType('eclosion');
       setDeleteConfirmOpen(true);
@@ -603,6 +968,23 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const handleOpenApprove = (soumission: SoumissionEnAttente) => {
     setSelectedSoumission(soumission);
     const initialData = JSON.parse(JSON.stringify(soumission.donnees || {}));
+    // ✅ v1.3.11 : S'assurer que dateIncubation est pré-rempli dans le modal de validation
+    //   - Si la soumission a dateIncubation → on la convertit en ISO (yyyy-mm-dd) pour l'input type="date"
+    //   - Sinon, on déduit dateIncubation = eclosion - 21 jours (rétrocompatibilité anciennes soumissions)
+    if (!initialData.dateIncubation && initialData.eclosion) {
+      const p = String(initialData.eclosion).split('/');
+      if (p.length === 3) {
+        const dEclo = new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
+        dEclo.setDate(dEclo.getDate() - 21);
+        initialData.dateIncubation = `${dEclo.getFullYear()}-${String(dEclo.getMonth() + 1).padStart(2, '0')}-${String(dEclo.getDate()).padStart(2, '0')}`;
+      }
+    } else if (initialData.dateIncubation && initialData.dateIncubation.includes('/')) {
+      // Convertir dd/mm/yyyy → yyyy-mm-dd pour l'input type="date"
+      const p = initialData.dateIncubation.split('/');
+      if (p.length === 3) {
+        initialData.dateIncubation = `${p[2]}-${p[1]}-${p[0]}`;
+      }
+    }
     setEditDonnees(initialData);
     setApproveIdChoisi(soumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`);
     setApproveIdError(false);
@@ -611,8 +993,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
     setApproveModalOpen(true);
   };
 
-  const confirmApprove = () => {
+  const confirmApprove = async () => {
     if (!selectedSoumission) return;
+    // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage avant approbation Mirage/Éclosion
+    if (selectedSoumission.type === 'Mirage' || selectedSoumission.type === 'Éclosion') {
+      const targetId = editDonnees.id || selectedSoumission.donnees?.id;
+      if (targetId && !assertNotLocked(targetId, `Approbation ${selectedSoumission.type}`)) {
+        return;
+      }
+    }
     if (selectedSoumission.type === 'Commande' && !approveIdChoisi.trim()) {
       setApproveIdError(true);
       return;
@@ -621,24 +1010,41 @@ export const OACModule: React.FC<OACModuleProps> = ({
       ? approveIdChoisi.trim()
       : (editDonnees.id || selectedSoumission.donnees?.id);
 
-    onApproveSoumission(selectedSoumission.idSoumission, finalId, editDonnees);
-    playAlertSound('success');
-    showNotification(`Soumission ${selectedSoumission.type} validée et enregistrée avec succès !`, true);
+    // ✅ AWAIT onApproveSoumission : le toast de succès ne s'affiche
+    //    que si l'enregistrement en base a réussi. En cas d'échec,
+    //    l'alerte est affichée par handleApproveSoumission.
     setApproveModalOpen(false);
     setSelectedSoumission(null);
     setShowRejectFormInModal(false);
+    try {
+      await onApproveSoumission(selectedSoumission.idSoumission, finalId, editDonnees);
+      // ✅ Son 'approve' distinctif (4 tons triomphants ascendants)
+      playAlertSound('approve');
+      showNotification(`Soumission ${selectedSoumission.type} validée et enregistrée dans la base avec succès !`, true);
+    } catch (e: any) {
+      console.error('[confirmApprove] Exception:', e);
+      playAlertSound('error');
+      showNotification(`Erreur lors de la validation : ${e?.message || e}`, false);
+    }
   };
 
-  const handleConfirmRejectFromModal = () => {
+  const handleConfirmRejectFromModal = async () => {
     if (!selectedSoumission) return;
     const raison = modalRejectRaison.trim() || 'Correction demandée par le superviseur';
-    onRejectSoumission(selectedSoumission.idSoumission, raison);
-    playAlertSound('rejection');
-    showNotification("Soumission rejetée. L'opérateur a reçu une alerte sonore et une demande de correction sur son téléphone.", true);
     setApproveModalOpen(false);
     setSelectedSoumission(null);
     setShowRejectFormInModal(false);
     setModalRejectRaison('');
+    try {
+      await onRejectSoumission(selectedSoumission.idSoumission, raison);
+      // ✅ Son 'reject' distinctif (buzzer descendant)
+      playAlertSound('reject');
+      showNotification("Soumission rejetée et enregistrée dans la base. L'opérateur a reçu une alerte sonore et une demande de correction.", true);
+    } catch (e: any) {
+      console.error('[handleConfirmRejectFromModal] Exception:', e);
+      playAlertSound('error');
+      showNotification(`Erreur lors du rejet : ${e?.message || e}`, false);
+    }
   };
 
   const handleRejectFromApprove = () => {
@@ -652,13 +1058,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
     setRejectModalOpen(true);
   };
 
-  const confirmReject = () => {
-    if (rejectSoumissionId) {
-      onRejectSoumission(rejectSoumissionId, rejectRaison.trim() || 'Correction demandée par le superviseur');
-      playAlertSound('rejection');
-      showNotification("Soumission rejetée. Une alerte sonore et une demande de correction ont été transmises à l'opérateur.", true);
-      setRejectModalOpen(false);
-      setRejectSoumissionId('');
+  const confirmReject = async () => {
+    if (!rejectSoumissionId) return;
+    const id = rejectSoumissionId;
+    const raison = rejectRaison.trim() || 'Correction demandée par le superviseur';
+    setRejectModalOpen(false);
+    setRejectSoumissionId('');
+    try {
+      await onRejectSoumission(id, raison);
+      // ✅ Son 'reject' distinctif (buzzer descendant)
+      playAlertSound('reject');
+      showNotification("Soumission rejetée et enregistrée dans la base. Une alerte sonore et une demande de correction ont été transmises à l'opérateur.", true);
+    } catch (e: any) {
+      console.error('[confirmReject] Exception:', e);
+      playAlertSound('error');
+      showNotification(`Erreur lors du rejet : ${e?.message || e}`, false);
     }
   };
 
@@ -705,7 +1119,56 @@ export const OACModule: React.FC<OACModuleProps> = ({
     showNotification(`Correction activée : ${s.resume}. Motif du rejet : « ${s.raison || 'Non précisé'} ». Modifiez les valeurs et cliquez sur Transmettre.`, true);
   };
 
-  const isSelected = tabActif === 0 ? Boolean(selC) : tabActif === 1 ? Boolean(selM) : Boolean(selE);
+  const isSelected = tabActif === 0 ? Boolean(selC) : tabActif === 1 ? Boolean(selM) : tabActif === 2 ? Boolean(selE) : Boolean(selC);
+
+  // Suppression d'une commande soumise (Admin)
+  const handleDeleteSoumissionClick = (s: SoumissionEnAttente) => {
+    setDeleteSoumissionTarget(s);
+    setDeleteSoumissionConfirmOpen(true);
+  };
+
+  const confirmDeleteSoumission = async () => {
+    if (!deleteSoumissionTarget) return;
+    const target = deleteSoumissionTarget;
+    setDeleteSoumissionConfirmOpen(false);
+    setDeleteSoumissionTarget(null);
+    if (approveModalOpen) {
+      setApproveModalOpen(false);
+      setSelectedSoumission(null);
+    }
+    try {
+      if (onDeleteSoumission) {
+        await onDeleteSoumission(target.idSoumission);
+      }
+      // ✅ Son 'success' court
+      playAlertSound('success');
+      showNotification(`Soumission ${target.type} (${target.idSoumission}) supprimée de la base avec succès.`, true);
+    } catch (e: any) {
+      console.error('[confirmDeleteSoumission] Exception:', e);
+      playAlertSound('error');
+      showNotification(`Erreur lors de la suppression : ${e?.message || e}`, false);
+    }
+  };
+
+  // ✅ FIX v2 — Wrapper local autour de OacLockButton qui rafraîchit l'état
+  // local lockedOacs après chaque action valider/déverrouiller.
+  // Sans ça, les boutons MODIFIER/SUPPRIMER resteraient désactivés (ou activés)
+  // jusqu'au prochain rechargement complet de la page.
+  const OacLockButtonWithRefresh = ({ idCommande }: { idCommande: string }) => {
+    return (
+      <div className="flex items-center gap-2">
+        <OacLockButton idCommande={idCommande} />
+        <button
+          type="button"
+          onClick={() => refreshOacLock(idCommande)}
+          title="Rafraîchir l'état de verrouillage"
+          className="px-2 py-1 text-xs font-medium text-slate-600 bg-white border border-slate-300 rounded hover:bg-slate-100 transition cursor-pointer"
+        >
+          ⟳
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div className="bg-slate-200/60 rounded-3xl p-3 sm:p-5 shadow-2xl border border-slate-300 max-w-5xl mx-auto space-y-4">
@@ -814,13 +1277,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   {role === 'admin' ? 'Validation admin — Soumissions en attente' : 'Suivi des déclarations — Circuit de validation'}
                 </h2>
                 <p className="text-[11px] text-slate-600">
-                  {role === 'admin' 
+                  {role === 'admin'
                     ? 'Validez ou rejetez les déclarations saisies par les opérateurs avant intégration dans la base'
                     : 'Toutes vos saisies sont enregistrées ici et transmises à l\'administrateur avant intégration dans la base'}
                 </p>
               </div>
             </div>
-            {onRefreshSoumissions && (
+            {onRefreshSoumissions && role === 'admin' && (
               <button
                 type="button"
                 onClick={onRefreshSoumissions}
@@ -977,8 +1440,8 @@ export const OACModule: React.FC<OACModuleProps> = ({
                             </div>
                           ) : (
                             <span className="text-[11px] font-bold text-slate-600">
-                              {isPending 
-                                ? '⏳ En attente de validation admin' 
+                              {isPending
+                                ? '⏳ En attente de validation admin'
                                 : `✔ Validé & Intégré (par ${s.validPar || 'admin'})`}
                             </span>
                           )
@@ -1087,55 +1550,260 @@ export const OACModule: React.FC<OACModuleProps> = ({
           )}
 
           {/* Sub-Tabs Row (1. Commandes, 2. Mirage (J+18), 3. Eclosion (J+21)) */}
-          <div className="flex border-b-[3px] border-[#2e86c1] gap-1 pt-1">
-            <button
-              onClick={() => {
-                setTabActif(0);
-              }}
-              className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
-                tabActif === 0
-                  ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
-                  : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
-              }`}
-            >
-              1. Commandes
-            </button>
-            <button
-              onClick={() => {
-                setTabActif(1);
-              }}
-              className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
-                tabActif === 1
-                  ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
-                  : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
-              }`}
-            >
-              2. Mirage (J+18)
-            </button>
-            <button
-              onClick={() => {
-                setTabActif(2);
-              }}
-              className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
-                tabActif === 2
-                  ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
-                  : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
-              }`}
-            >
-              3. Eclosion (J+21)
-            </button>
+          <div className="flex flex-wrap items-center justify-between border-b-[3px] border-[#2e86c1] gap-1 pt-1">
+            <div className="flex gap-1">
+              <button
+                onClick={() => {
+                  setTabActif(tabActif === 0 ? null : 0);
+                }}
+                className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
+                  tabActif === 0
+                    ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
+                    : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
+                }`}
+              >
+                1. Commandes
+              </button>
+              <button
+                onClick={() => {
+                  setTabActif(tabActif === 1 ? null : 1);
+                }}
+                className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
+                  tabActif === 1
+                    ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
+                    : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
+                }`}
+              >
+                2. Mirage (J+18)
+              </button>
+              <button
+                onClick={() => {
+                  setTabActif(tabActif === 2 ? null : 2);
+                }}
+                className={`px-5 py-2.5 rounded-t-xl font-bold text-xs sm:text-sm tracking-wide transition-all ${
+                  tabActif === 2
+                    ? 'bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white shadow-md'
+                    : 'bg-[#e8eef5] text-slate-700 hover:bg-[#d6eaf8]'
+                }`}
+              >
+                3. Eclosion (J+21)
+              </button>
+            </div>
+            {tabActif !== null && (
+              <button
+                type="button"
+                onClick={() => setTabActif(null)}
+                className="px-3.5 py-1.5 mb-1 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+                title="Fermer le formulaire et revenir à la liste des commandes"
+              >
+                <span>✕</span>
+                <span>Fermer le formulaire</span>
+              </button>
+            )}
           </div>
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          TAB 1 : COMMANDE OAC (Screenshot 1)
+          VUE PAR DÉFAUT : LISTBOX DES DERNIÈRES COMMANDES EN DESSOUS DU MENU
          ══════════════════════════════════════════════════════════════════════════ */}
-      {tabActif === 0 && (
+      {tabActif === null && (
+        <div className="space-y-4 animate-fade-in mt-4">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-[#1B4F72] flex items-center gap-2">
+                  <span>📋</span>
+                  <span>Dernières commandes OAC</span>
+                  <span className="text-xs font-bold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                    {oacList.length} lots
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Choisissez une opération dans le menu ci-dessus (1. Commandes, 2. Mirage, 3. Éclosion) ou cliquez sur un lot ci-dessous pour lancer l'opération désirée.
+                </p>
+              </div>
+
+              {/* Filtres & Recherche */}
+              <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                <input
+                  type="text"
+                  placeholder="Rechercher lot, race..."
+                  value={overviewSearch}
+                  onChange={(e) => setOverviewSearch(e.target.value)}
+                  className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                />
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                  {(['Tous', 'En incubation', 'Miré', 'Éclos'] as const).map((fil) => (
+                    <button
+                      key={fil}
+                      type="button"
+                      onClick={() => setOverviewFilter(fil)}
+                      className={`px-2.5 py-1 rounded-lg transition text-[11px] cursor-pointer ${
+                        overviewFilter === fil
+                          ? 'bg-white text-[#1B4F72] shadow-xs font-black'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {fil}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Tableau complet */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-700">
+                <thead className="bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white text-[11px] font-bold uppercase tracking-wider">
+                  <tr>
+                    <th className="px-3.5 py-2.5">Date</th>
+                    <th className="px-3 py-2.5">Race</th>
+                    <th className="px-3 py-2.5">Fournisseur</th>
+                    <th className="px-3 py-2.5 text-center">Cartons</th>
+                    <th className="px-3 py-2.5 text-right">Reçus</th>
+                    <th className="px-3 py-2.5 text-right">Cassés</th>
+                    <th className="px-3.5 py-2.5 text-center">Date éclo.</th>
+                    <th className="px-3.5 py-2.5 text-center">STATUT</th>
+                    <th className="px-3 py-2.5 text-right">ID</th>
+                    <th className="px-3 py-2.5 text-center">Opérations</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {oacList
+                    .filter((item) => {
+                      if (overviewFilter !== 'Tous') {
+                        if (overviewFilter === 'Éclos' && item.statut !== 'Éclos' && item.statut !== 'Eclos') return false;
+                        if (overviewFilter === 'Miré' && item.statut !== 'Miré') return false;
+                        if (overviewFilter === 'En incubation' && item.statut !== 'En incubation' && item.statut !== 'Incubation') return false;
+                      }
+                      if (overviewSearch.trim()) {
+                        const s = overviewSearch.toLowerCase();
+                        return (
+                          item.id.toLowerCase().includes(s) ||
+                          item.race.toLowerCase().includes(s) ||
+                          item.fournisseur.toLowerCase().includes(s) ||
+                          (item.date && item.date.includes(s)) ||
+                          (item.eclosion && item.eclosion.includes(s))
+                        );
+                      }
+                      return true;
+                    })
+                    .map((item) => {
+                      const isRowSelected = selC === item.id;
+                      const isLocked = isOacLocked(item);
+
+                      return (
+                        <tr
+                          key={item.id + item.date}
+                          className={`hover:bg-[#d6eaf8]/40 transition ${
+                            isRowSelected ? 'bg-[#d6eaf8]/80 font-bold border-l-4 border-[#2E86C1]' : 'even:bg-slate-50/70'
+                          }`}
+                        >
+                          <td className="px-3.5 py-2 whitespace-nowrap font-medium">{item.date}</td>
+                          <td className="px-3 py-2 font-bold text-slate-900">{item.race}</td>
+                          <td className="px-3 py-2 text-slate-600">{item.fournisseur}</td>
+                          <td className="px-3 py-2 text-center font-semibold">{item.cartons}</td>
+                          <td className="px-3 py-2 text-right font-medium">
+                            {(item.recus || item.cartons * 360).toLocaleString('fr-FR')}
+                          </td>
+                          <td className="px-3 py-2 text-right font-medium text-rose-700">
+                            {item.nbCasses}
+                          </td>
+                          <td className="px-3.5 py-2 text-center whitespace-nowrap font-bold text-sky-950">
+                            {item.eclosion}
+                          </td>
+                          <td className="px-3 py-2 text-center whitespace-nowrap font-bold text-xs">
+                            {isLocked && <span title="Verrouillée par validation admin" className="mr-1">🔒</span>}
+                            {item.statut === 'Éclos' || item.statut === 'Eclos' ? (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold text-[11px]">
+                                🐣 Éclos
+                              </span>
+                            ) : item.statut === 'Miré' ? (
+                              <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-300 font-extrabold text-[11px]">
+                                ⚪ Miré
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 font-extrabold text-[11px]">
+                                ⏳ {item.statut || 'En incubation'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-700 text-[11px] font-bold">
+                            {item.id}
+                          </td>
+                          <td className="px-3 py-2 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  loadC(item);
+                                  setTabActif(0);
+                                }}
+                                className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-[#1B4F72] rounded font-bold text-[10px] transition cursor-pointer"
+                                title="Ouvrir la commande"
+                              >
+                                📦 Commande
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  loadM(item);
+                                  setTabActif(1);
+                                }}
+                                className="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-bold text-[10px] transition cursor-pointer"
+                                title="Ouvrir le mirage"
+                              >
+                                ⚪ Mirage
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  loadE(item);
+                                  setTabActif(2);
+                                }}
+                                className="px-2 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded font-bold text-[10px] transition cursor-pointer"
+                                title="Ouvrir l'éclosion"
+                              >
+                                🐣 Éclosion
+                              </button>
+                              {role === 'admin' && (
+                                <OacLockButtonWithRefresh idCommande={item.id} />
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          TAB 1 : COMMANDE OAC
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {tabActif === 0 && (() => {
+        const selOacForC = selC ? oacList.find((o) => o.id === selC) : null;
+        const commandeRestriction = selOacForC
+          ? checkOACRestriction(selOacForC, role, 'Commande', soumissions)
+          : { allowed: true, reason: '' };
+        const isCommandeBlocked = role !== 'admin' && Boolean(selC) && !commandeRestriction.allowed;
+
+        return (
         <div className="space-y-4 animate-fade-in">
           <div className="bg-white rounded-2xl shadow-md border border-[#2e86c1]/20 overflow-hidden">
             {/* Blue Header Bar */}
-            <div className="bg-gradient-to-r from-[#1B4F72] via-[#21618C] to-[#2E86C1] px-6 py-4 flex items-center gap-3 text-white">
-              <span className="text-2xl">📦</span>
-              <h2 className="text-base sm:text-lg font-bold tracking-tight">Commande OAC</h2>
+            <div className="bg-gradient-to-r from-[#1B4F72] via-[#21618C] to-[#2E86C1] px-6 py-4 flex items-center justify-between text-white">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">📦</span>
+                <h2 className="text-base sm:text-lg font-bold tracking-tight">Commande OAC</h2>
+              </div>
+              {selC && (
+                <span className="text-xs bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full font-mono font-bold">
+                  Lot : {selC} {selOacForC?.statut ? `(${selOacForC.statut})` : ''}
+                </span>
+              )}
             </div>
 
             {/* Form Fields */}
@@ -1152,10 +1820,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     required
                     value={cDt}
                     onChange={(e) => setCDt(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    disabled={isCommandeBlocked}
+                    className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                      isCommandeBlocked ? 'opacity-60 cursor-not-allowed bg-slate-100 !border-slate-300' : ''
+                    }`}
                     style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
+                      background: isCommandeBlocked ? '#f1f5f9' : 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: isCommandeBlocked ? '2px solid #cbd5e1' : '2px solid #f39c12',
                     }}
                   />
                 </div>
@@ -1168,10 +1839,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   <select
                     value={cType}
                     onChange={(e) => setCType(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    disabled={isCommandeBlocked}
+                    className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                      isCommandeBlocked ? 'opacity-60 cursor-not-allowed bg-slate-100 !border-slate-300' : ''
+                    }`}
                     style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
+                      background: isCommandeBlocked ? '#f1f5f9' : 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: isCommandeBlocked ? '2px solid #cbd5e1' : '2px solid #f39c12',
                     }}
                   >
                     <option value="">--</option>
@@ -1198,10 +1872,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     placeholder=""
                     value={cCar}
                     onChange={(e) => setCCar(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    disabled={isCommandeBlocked}
+                    className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                      isCommandeBlocked ? 'opacity-60 cursor-not-allowed bg-slate-100 !border-slate-300' : ''
+                    }`}
                     style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
+                      background: isCommandeBlocked ? '#f1f5f9' : 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: isCommandeBlocked ? '2px solid #cbd5e1' : '2px solid #f39c12',
                     }}
                   />
                 </div>
@@ -1218,24 +1895,46 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     placeholder=""
                     value={cCas}
                     onChange={(e) => setCCas(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    disabled={isCommandeBlocked}
+                    className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                      isCommandeBlocked ? 'opacity-60 cursor-not-allowed bg-slate-100 !border-slate-300' : ''
+                    }`}
                     style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
+                      background: isCommandeBlocked ? '#f1f5f9' : 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: isCommandeBlocked ? '2px solid #cbd5e1' : '2px solid #f39c12',
                     }}
                   />
                 </div>
-                <div className="flex items-center gap-2 pb-2">
-                  <input
-                    type="checkbox"
-                    id="c_j21"
-                    checked={cJ21}
-                    onChange={(e) => setCJ21(e.target.checked)}
-                    className="w-4 h-4 text-[#2E86C1] rounded border-slate-300 focus:ring-[#2E86C1]"
-                  />
-                  <label htmlFor="c_j21" className="text-xs font-semibold text-slate-700 select-none">
-                    J+21 (sinon J+22)
+                {/* ✅ v1.3.8 : Remplace la checkbox "J+21 (sinon J+22)" par un champ Date d'incubation obligatoire */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                    <span>🌡️</span>
+                    <span>Date d'incubation</span>
+                    <span className="text-[#E74C3C]">*</span>
+                    <span className="ml-1 text-[10px] font-normal text-slate-500 italic">(J+21 = date d'éclosion)</span>
                   </label>
+                  <input
+                    type="date"
+                    value={cDateIncub}
+                    onChange={(e) => setCDateIncub(e.target.value)}
+                    disabled={isCommandeBlocked}
+                    className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                      isCommandeBlocked ? 'opacity-60 cursor-not-allowed bg-slate-100 !border-slate-300' : ''
+                    }`}
+                    style={{
+                      background: isCommandeBlocked ? '#f1f5f9' : 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: isCommandeBlocked ? '2px solid #cbd5e1' : '2px solid #f39c12',
+                    }}
+                  />
+                  {/* Aperçu de la date d'éclosion calculée */}
+                  {cDateIncub && (
+                    <div className="mt-1.5 text-[11px] text-slate-600 font-medium flex items-center gap-1">
+                      <span className="text-slate-400">→ Éclosion prévue :</span>
+                      <span className="text-[#2E86C1] font-bold">
+                        {calculateEclosionDate(cDateIncub)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1249,10 +1948,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   <select
                     value={cRace}
                     onChange={(e) => setCRace(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    disabled={isCommandeBlocked}
+                    className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                      isCommandeBlocked ? 'opacity-60 cursor-not-allowed bg-slate-100 !border-slate-300' : ''
+                    }`}
                     style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
+                      background: isCommandeBlocked ? '#f1f5f9' : 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: isCommandeBlocked ? '2px solid #cbd5e1' : '2px solid #f39c12',
                     }}
                   >
                     <option value="">-- Choisir --</option>
@@ -1272,10 +1974,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   <select
                     value={cFourn}
                     onChange={(e) => setCFourn(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    disabled={isCommandeBlocked}
+                    className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                      isCommandeBlocked ? 'opacity-60 cursor-not-allowed bg-slate-100 !border-slate-300' : ''
+                    }`}
                     style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
+                      background: isCommandeBlocked ? '#f1f5f9' : 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: isCommandeBlocked ? '2px solid #cbd5e1' : '2px solid #f39c12',
                     }}
                   >
                     <option value="">-- Choisir --</option>
@@ -1288,8 +1993,50 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </div>
               </div>
 
-              {/* Operator Notice */}
-              {role !== 'admin' && (
+              {/* ✅ RÈGLE MÉTIER — Alerte blocage utilisateur standard si validé / en incubation / miré / éclos */}
+              {isCommandeBlocked && (
+                <div className="w-full text-xs bg-amber-50 text-amber-950 border-2 border-amber-400 rounded-xl p-3.5 flex items-start gap-3 shadow-sm">
+                  <span className="text-xl">🔒</span>
+                  <div className="space-y-1">
+                    <div className="font-extrabold text-amber-900 text-sm">Données de commande verrouillées</div>
+                    <p className="text-amber-800 leading-relaxed font-medium">
+                      {commandeRestriction.reason || 'Ce lot a été validé et son statut est en incubation, miré ou éclos. Les données de commande ne peuvent pas être modifiées par un utilisateur. Seuls les administrateurs sont autorisés à les modifier.'}
+                    </p>
+                    <div className="pt-1.5 flex items-center gap-2">
+                      <span className="text-slate-600">Besoin de saisir une nouvelle commande ?</span>
+                      <button
+                        type="button"
+                        onClick={razC}
+                        className="px-2.5 py-1 bg-amber-200 hover:bg-amber-300 text-amber-950 font-bold rounded text-[11px] transition cursor-pointer"
+                      >
+                        ➕ Saisir une nouvelle commande
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Mode Administrateur avec commande sélectionnée */}
+              {role === 'admin' && selC && (
+                <div className="w-full text-xs bg-emerald-50 text-emerald-950 border border-emerald-300 rounded-xl p-3 flex items-center justify-between gap-2 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">👑</span>
+                    <span>
+                      <strong>Mode Administrateur :</strong> Vous modifiez la commande <strong>{selC}</strong> (Statut : <span className="font-semibold">{selOacForC?.statut || 'En incubation'}</span>). Vous pouvez modifier directement les données.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={razC}
+                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded font-bold text-[11px] transition cursor-pointer"
+                  >
+                    + Nouveau lot
+                  </button>
+                </div>
+              )}
+
+              {/* Operator Notice (Nouvelle commande) */}
+              {role !== 'admin' && !selC && (
                 <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
                   <span className="text-base">🛡️</span>
                   <span><strong>Mode Opérateur :</strong> Cette commande sera transmise à l'administrateur pour validation avant toute intégration dans la base de données.</span>
@@ -1301,18 +2048,26 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                  disabled={isCommandeBlocked}
+                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition flex items-center gap-1.5 ${
+                    isCommandeBlocked
+                      ? 'opacity-40 cursor-not-allowed bg-slate-400'
+                      : 'active:scale-95 cursor-pointer'
+                  }`}
                   style={{
-                    background: role === 'admin' 
-                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)' 
+                    background: isCommandeBlocked
+                      ? '#94a3b8'
+                      : role === 'admin'
+                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)'
                       : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
+                  title={isCommandeBlocked ? commandeRestriction.reason : undefined}
                 >
                   <span>
-                    {role === 'admin' 
-                      ? '✔ ENREGISTRER DIRECTEMENT' 
-                      : (activeCorrection && activeCorrection.type === 'Commande' 
-                          ? '📨 ENVOYER LA COMMANDE CORRIGÉE' 
+                    {role === 'admin'
+                      ? '✔ ENREGISTRER DIRECTEMENT'
+                      : (activeCorrection && activeCorrection.type === 'Commande'
+                          ? '📨 ENVOYER LA COMMANDE CORRIGÉE'
                           : '📨 SOUMETTRE POUR VALIDATION')}
                   </span>
                 </button>
@@ -1355,12 +2110,12 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   onClick={razC}
                   className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition cursor-pointer"
                 >
-                  ↺ ANNULER
+                  ↺ {selC ? 'NOUVELLE COMMANDE' : 'ANNULER'}
                 </button>
                 <button
                   type="button"
-                  onClick={onClose || razC}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#555] hover:bg-[#333] text-white border border-[#444] transition"
+                  onClick={onClose || (() => setTabActif(null))}
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#555] hover:bg-[#333] text-white border border-[#444] transition cursor-pointer"
                 >
                   ✕ FERMER
                 </button>
@@ -1390,7 +2145,6 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {oacList
-                    .filter((item) => item.statut !== 'Éclos')
                     .map((item) => {
                       const isRowSelected = selC === item.id;
 
@@ -1417,12 +2171,22 @@ export const OACModule: React.FC<OACModuleProps> = ({
                         <td className="px-3.5 py-2 text-center whitespace-nowrap font-bold text-sky-950">
                           {item.eclosion}
                         </td>
-                        <td className="px-3 py-2 text-center whitespace-nowrap font-bold text-amber-700 text-xs">
-                          {
-                            (item.commerciaux != null) ? "Eclos" : 
-                            (item.clairs != null) ? "Miré" : 
-                            "En incubation"
-                          }
+                        <td className="px-3 py-2 text-center whitespace-nowrap font-bold text-xs">
+                          {/* ✅ PATCH : badge 🔒 si verrouillée */}
+                          {isOacLocked(item) && <span title="Verrouillée par admin" className="mr-1">🔒</span>}
+                          {item.statut === 'Éclos' || item.statut === 'Eclos' ? (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold text-[11px]">
+                              🐣 Éclos
+                            </span>
+                          ) : item.statut === 'Miré' ? (
+                            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-300 font-extrabold text-[11px]">
+                              ⚪ Miré
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 font-extrabold text-[11px]">
+                              ⏳ {item.statut || 'En incubation'}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-slate-500 text-[11px]">
                           {item.id}
@@ -1434,8 +2198,19 @@ export const OACModule: React.FC<OACModuleProps> = ({
               </table>
             </div>
           </div>
+
+          {/* ✅ PATCH RÈGLES DE GESTION — Bouton Valider/Déverrouiller (admin only) */}
+          {selC && role === 'admin' && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-700">
+                Commande sélectionnée : <span className="font-mono">{selC}</span>
+              </span>
+              <OacLockButtonWithRefresh idCommande={selC} />
+            </div>
+          )}
         </div>
-      )}
+        );
+      })()}
 
       {mainTab === 'cycle' && role === 'comptable' && (
         <div className="bg-rose-100 text-rose-800 p-6 rounded-2xl border border-rose-200 text-center font-bold">
@@ -1444,7 +2219,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          TAB 2 : MIRAGE J+18 (Screenshot 2)
+          TAB 2 : MIRAGE J+18
          ══════════════════════════════════════════════════════════════════════════ */}
       {tabActif === 1 && (
         <div className="space-y-4 animate-fade-in">
@@ -1475,26 +2250,38 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     }}
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <span>⚪</span>
-                    <span>Nbre OAC clairs</span>
-                    <span className="text-[#E74C3C]">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder=""
-                    value={mCla}
-                    onChange={(e) => handleClairsInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                    style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
-                    }}
-                  />
-                </div>
+                  {(() => {
+                    const selOac = oacList.find(o => o.id === mId);
+                    const isLocked = isOacLocked(selOac);
+                    const restriction = checkOACRestriction(selOac, role, 'Mirage', soumissions);
+                    const isBlocked = isLocked || !restriction.allowed;
+
+                    return (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                          <span>⚪</span>
+                          <span>Nbre OAC clairs</span>
+                          <span className="text-[#E74C3C]">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder=""
+                          value={mCla}
+                          onChange={(e) => handleClairsInput(e.target.value)}
+                          disabled={isBlocked}
+                          className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                            isBlocked ? 'opacity-50 cursor-not-allowed' : ''
+                          }`}
+                          style={{
+                            background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                            border: '2px solid #f39c12',
+                          }}
+                        />
+                      </div>
+                    );
+                  })()}
                 <div>
                   <label className="block text-xs font-bold text-[#1B4F72] mb-1.5 flex items-center gap-1.5">
                     <span>🐣</span>
@@ -1515,6 +2302,36 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </div>
               </div>
 
+              {/* ✅ PATCH RÈGLES DE GESTION — Alerte si OAC sélectionnée verrouillée ou restreinte */}
+              {mId && (() => {
+                const selOac = oacList.find(o => o.id === mId);
+                const isLocked = isOacLocked(selOac);
+                const restriction = checkOACRestriction(selOac, role, 'Mirage', soumissions);
+
+                if (isLocked) {
+                  return (
+                    <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-300 rounded-xl p-3 flex items-center gap-2">
+                      <span className="text-base">🔒</span>
+                      <span>
+                        <strong>Commande verrouillée par validation admin.</strong> Le mirage est bloqué.
+                        Faites déverrouiller par un administrateur.
+                      </span>
+                    </div>
+                  );
+                }
+                if (!restriction.allowed) {
+                  return (
+                    <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-300 rounded-xl p-3 flex items-center gap-2">
+                      <span className="text-base">🔒</span>
+                      <span>
+                        <strong>Mirage restreint :</strong> {restriction.reason}
+                      </span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
               {/* Operator Notice */}
               {role !== 'admin' && (
                 <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
@@ -1528,18 +2345,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                  disabled={isOacLocked(oacList.find(o => o.id === mId)) || !checkOACRestriction(oacList.find(o => o.id === mId), role, 'Mirage', soumissions).allowed}
+                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer ${
+                    (isOacLocked(oacList.find(o => o.id === mId)) || !checkOACRestriction(oacList.find(o => o.id === mId), role, 'Mirage', soumissions).allowed) ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                   style={{
-                    background: role === 'admin' 
-                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)' 
+                    background: role === 'admin'
+                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)'
                       : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
                   <span>
-                    {role === 'admin' 
-                      ? '✔ ENREGISTRER DIRECTEMENT' 
-                      : (activeCorrection && activeCorrection.type === 'Mirage' 
-                          ? '📨 ENVOYER LE MIRAGE CORRIGÉ' 
+                    {role === 'admin'
+                      ? '✔ ENREGISTRER DIRECTEMENT'
+                      : (activeCorrection && activeCorrection.type === 'Mirage'
+                          ? '📨 ENVOYER LE MIRAGE CORRIGÉ'
                           : '📨 SOUMETTRE LE MIRAGE POUR VALIDATION')}
                   </span>
                 </button>
@@ -1610,6 +2430,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     <th className="px-3 py-2.5 text-center">INCUBES</th>
                     <th className="px-3 py-2.5 text-center">CLAIRS</th>
                     <th className="px-3 py-2.5 text-center">FERTILES</th>
+                    <th className="px-3 py-2.5 text-center">STATUT</th>
                     <th className="px-3 py-2.5 text-right">ID</th>
                   </tr>
                 </thead>
@@ -1643,6 +2464,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
                         <td className="px-3 py-2 text-center font-extrabold text-emerald-800">
                           {fertiles ? fertiles.toLocaleString('fr-FR') : ''}
                         </td>
+                        <td className="px-3 py-2 text-center font-bold text-amber-700 text-[10px]">
+                          {/* ✅ PATCH : badge 🔒 si verrouillée */}
+                          {isOacLocked(item) && <span title="Verrouillée par admin">🔒 </span>}
+                          {item.statut || "En incubation"}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono text-slate-400 text-[11px]">
                           {item.id}
                         </td>
@@ -1653,11 +2479,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
               </table>
             </div>
           </div>
+
+          {/* ✅ PATCH RÈGLES DE GESTION — Bouton Valider/Déverrouiller (admin only) */}
+          {selM && role === 'admin' && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-700">
+                Lot sélectionné : <span className="font-mono">{selM}</span>
+              </span>
+              <OacLockButtonWithRefresh idCommande={selM} />
+            </div>
+          )}
         </div>
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════════
-          TAB 3 : ÉCLOSION J+21 (Screenshot 3)
+          TAB 3 : ÉCLOSION J+21
          ══════════════════════════════════════════════════════════════════════════ */}
       {tabActif === 2 && (
         <div className="space-y-4 animate-fade-in">
@@ -1688,68 +2524,116 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <span>🍼</span>
-                    <span>Nbre poussins commerciales</span>
-                    <span className="text-[#E74C3C]">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder=""
-                    value={eNes}
-                    onChange={(e) => setENes(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                    style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <span>💉</span>
-                    <span>Poussins Hand (handicapes)</span>
-                    <span className="text-[#E74C3C]">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder=""
-                    value={eHan}
-                    onChange={(e) => setEHan(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                    style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <span>💀</span>
-                    <span>Poussins morts</span>
-                    <span className="text-[#E74C3C]">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder=""
-                    value={eMor}
-                    onChange={(e) => setEMor(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                    style={{
-                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                      border: '2px solid #f39c12',
-                    }}
-                  />
-                </div>
-              </div>
+              {(() => {
+                const selOac = oacList.find((o) => o.id === eId);
+                const isLocked = isOacLocked(selOac);
+                const restriction = checkOACRestriction(selOac, role, 'Eclosion', soumissions);
+                const isBlocked = isLocked || !restriction.allowed;
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                        <span>🍼</span>
+                        <span>Nbre poussins commerciales</span>
+                        <span className="text-[#E74C3C]">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder=""
+                        value={eNes}
+                        onChange={(e) => setENes(e.target.value)}
+                        disabled={isBlocked}
+                        className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                          isBlocked ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                        style={{
+                          background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                          border: '2px solid #f39c12',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                        <span>💉</span>
+                        <span>Poussins Hand (handicapes)</span>
+                        <span className="text-[#E74C3C]">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder=""
+                        value={eHan}
+                        onChange={(e) => setEHan(e.target.value)}
+                        disabled={isBlocked}
+                        className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                          isBlocked ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                        style={{
+                          background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                          border: '2px solid #f39c12',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                        <span>💀</span>
+                        <span>Poussins morts</span>
+                        <span className="text-[#E74C3C]">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder=""
+                        value={eMor}
+                        onChange={(e) => setEMor(e.target.value)}
+                        disabled={isBlocked}
+                        className={`w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                          isBlocked ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                        style={{
+                          background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                          border: '2px solid #f39c12',
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ✅ PATCH RÈGLES DE GESTION — Alerte si OAC sélectionnée verrouillée ou restreinte */}
+              {eId && (() => {
+                const selOac = oacList.find((o) => o.id === eId);
+                const isLocked = isOacLocked(selOac);
+                const restriction = checkOACRestriction(selOac, role, 'Eclosion', soumissions);
+
+                if (isLocked) {
+                  return (
+                    <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-300 rounded-xl p-3 flex items-center gap-2">
+                      <span className="text-base">🔒</span>
+                      <span>
+                        <strong>Commande verrouillée par validation admin.</strong> L'éclosion est bloquée.
+                        Faites déverrouiller par un administrateur.
+                      </span>
+                    </div>
+                  );
+                }
+                if (!restriction.allowed) {
+                  return (
+                    <div className="w-full text-xs bg-amber-50 text-amber-900 border border-amber-300 rounded-xl p-3 flex items-center gap-2">
+                      <span className="text-base">🔒</span>
+                      <span>
+                        <strong>Éclosion restreinte :</strong> {restriction.reason}
+                      </span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
 
               {/* Operator Notice */}
               {role !== 'admin' && (
@@ -1764,19 +2648,22 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                  disabled={isOacLocked(oacList.find(o => o.id === eId)) || !checkOACRestriction(oacList.find(o => o.id === eId), role, 'Eclosion', soumissions).allowed}
+                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer ${
+                    (isOacLocked(oacList.find(o => o.id === eId)) || !checkOACRestriction(oacList.find(o => o.id === eId), role, 'Eclosion', soumissions).allowed) ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                   style={{
-                    background: role === 'admin' 
-                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)' 
+                    background: role === 'admin'
+                      ? 'linear-gradient(135deg, #1B4F72, #2E86C1)'
                       : 'linear-gradient(135deg, #d97706, #f59e0b)',
                   }}
                 >
                   <span>
-                    {role === 'admin' 
-                      ? '✔ ENREGISTRER DIRECTEMENT' 
-                      : (activeCorrection && activeCorrection.type === 'Éclosion' 
-                          ? '📨 ENVOYER L’ÉCLOSION CORRIGÉE' 
-                          : '📨 SOUMETTRE L’ÉCLOSION POUR VALIDATION')}
+                    {role === 'admin'
+                      ? '✔ ENREGISTRER DIRECTEMENT'
+                      : (activeCorrection && activeCorrection.type === 'Éclosion'
+                          ? "📨 ENVOYER L’ÉCLOSION CORRIGÉE"
+                          : "📨 SOUMETTRE L’ÉCLOSION POUR VALIDATION")}
                   </span>
                 </button>
                 {role === 'admin' && (
@@ -1822,14 +2709,12 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={onClose || razE}
-                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#555] hover:bg-[#333] text-white border border-[#444] transition"
+                  onClick={() => setTabActif(null)}
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#555] hover:bg-[#333] text-white border border-[#444] transition cursor-pointer"
                 >
                   ✕ FERMER
                 </button>
               </div>
-
-
             </div>
           </div>
 
@@ -1854,7 +2739,6 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {oacList
-                    .filter((item) => item.statut !== 'Éclos')
                     .map((item, idx) => {
                       const isRowSelected = selE === item.id;
 
@@ -1884,6 +2768,8 @@ export const OACModule: React.FC<OACModuleProps> = ({
                           {item.morts !== null && item.morts !== undefined ? item.morts : ''}
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-slate-400 text-[11px]">
+                          {/* ✅ PATCH : badge 🔒 si verrouillée */}
+                          {isOacLocked(item) && <span title="Verrouillée par admin" className="mr-1">🔒</span>}
                           {item.id}
                         </td>
                       </tr>
@@ -1893,6 +2779,16 @@ export const OACModule: React.FC<OACModuleProps> = ({
               </table>
             </div>
           </div>
+
+          {/* ✅ PATCH RÈGLES DE GESTION — Bouton Valider/Déverrouiller (admin only) */}
+          {selE && role === 'admin' && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-700">
+                Lot sélectionné : <span className="font-mono">{selE}</span>
+              </span>
+              <OacLockButtonWithRefresh idCommande={selE} />
+            </div>
+          )}
         </div>
       )}
         </div>
@@ -1903,12 +2799,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
          ══════════════════════════════════════════════════════════════════════════ */}
       {approveModalOpen && selectedSoumission && (() => {
         const sType = selectedSoumission.type;
-        const targetId = sType === 'Commande' 
-          ? approveIdChoisi 
+        const targetId = sType === 'Commande'
+          ? approveIdChoisi
           : (editDonnees.id || selectedSoumission.donnees?.id);
         const batch = oacList.find((x) => x.id === targetId);
         const cubes = batch?.cubes || ((batch?.cartons || 0) * 360 - (batch?.nbCasses || 0)) || 0;
         const fertilesOrigin = batch?.fertiles || cubes;
+
+        // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage dans la modale
+        const isBatchLocked = isOacLocked(batch);
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
@@ -1928,6 +2827,17 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   ✕
                 </button>
               </div>
+
+              {/* ✅ PATCH : Alerte si lot verrouillé */}
+              {isBatchLocked && (sType === 'Mirage' || sType === 'Éclosion') && (
+                <div className="bg-amber-50 border-l-4 border-amber-400 text-amber-900 px-5 py-3 text-xs flex items-center gap-2">
+                  <span className="text-base">🔒</span>
+                  <span>
+                    <strong>Lot {targetId} verrouillé par validation admin.</strong> Vous devez le déverrouiller
+                    avant de pouvoir approuver cette soumission.
+                  </span>
+                </div>
+              )}
 
               {/* In-Modal Rejection Form */}
               {showRejectFormInModal ? (
@@ -2000,7 +2910,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   </div>
 
                   {/* ─────────────────────────────────────────────────────────────
-                      TYPE 1: MIRAGE (Pas de sélection d'ID! Modif clairs/fertiles)
+                      TYPE 1: MIRAGE
                      ───────────────────────────────────────────────────────────── */}
                   {sType === 'Mirage' && (() => {
                     const clairsVal = editDonnees.clairs !== undefined && editDonnees.clairs !== null ? editDonnees.clairs : '';
@@ -2038,6 +2948,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                             min="0"
                             max={cubes > 0 ? cubes : undefined}
                             value={clairsVal}
+                            disabled={isBatchLocked}
                             onChange={(e) => {
                               const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
                               setEditDonnees({
@@ -2046,8 +2957,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
                                 fertiles: Math.max(0, cubes - Number(val || 0)),
                               });
                             }}
-                            className="w-full px-4 py-2.5 bg-emerald-50/40 border-2 border-emerald-500 rounded-xl text-lg font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-                            placeholder="0"
+                            className={`w-full px-4 py-2.5 bg-emerald-50/40 border-2 border-emerald-500 rounded-xl text-lg font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono ${
+                              isBatchLocked ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
+                            placeholder=""
                           />
 
                           {/* Live Recalculated KPIs */}
@@ -2078,18 +2991,22 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   })()}
 
                   {/* ─────────────────────────────────────────────────────────────
-                      TYPE 2: ÉCLOSION (Pas de sélection d'ID! Modif poussins)
+                      TYPE 2: ÉCLOSION
                      ───────────────────────────────────────────────────────────── */}
                   {sType === 'Éclosion' && (() => {
                     const commVal = editDonnees.commerciaux !== undefined && editDonnees.commerciaux !== null ? editDonnees.commerciaux : '';
                     const hanVal = editDonnees.handicapes !== undefined && editDonnees.handicapes !== null ? editDonnees.handicapes : '';
                     const morVal = editDonnees.morts !== undefined && editDonnees.morts !== null ? editDonnees.morts : '';
-                    
+
                     const cNum = Number(commVal || 0);
                     const bonus = Math.ceil(cNum * 0.02);
                     const pourVente = Math.max(0, cNum - bonus);
                     const tauxInc = cubes > 0 ? ((cNum / cubes) * 100).toFixed(1) : '0';
                     const tauxFer = fertilesOrigin > 0 ? ((cNum / fertilesOrigin) * 100).toFixed(1) : '0';
+
+                    const restriction = isBatchLocked
+                      ? { allowed: false, reason: 'Lot verrouillé par validation admin.' }
+                      : checkOACRestriction(batch || {} as OAC, role, 'Eclosion', soumissions);
 
                     return (
                       <div className="space-y-3">
@@ -2103,6 +3020,14 @@ export const OACModule: React.FC<OACModuleProps> = ({
                             Fertiles : {fertilesOrigin.toLocaleString('fr-FR')} • Incubés : {cubes.toLocaleString('fr-FR')}
                           </div>
                         </div>
+
+                        {/* Restriction Message */}
+                        {!restriction.allowed && (
+                          <div className="w-full text-xs bg-red-50 text-red-900 border border-red-200 rounded-xl p-3 flex items-center gap-2">
+                            <span className="text-base">🚫</span>
+                            <span><strong>Restriction :</strong> {restriction.reason}</span>
+                          </div>
+                        )}
 
                         <div className="bg-white border-2 border-emerald-200 rounded-2xl p-4 space-y-3">
                           <p className="text-xs font-black text-slate-800 uppercase tracking-wide">
@@ -2118,6 +3043,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                                 type="number"
                                 min="0"
                                 value={commVal}
+                                disabled={!restriction.allowed}
                                 onChange={(e) => {
                                   const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
                                   const num = Number(val || 0);
@@ -2129,8 +3055,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
                                     pourVente: Math.max(0, num - b),
                                   });
                                 }}
-                                className="w-full px-3 py-2 bg-emerald-50/40 border-2 border-emerald-500 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-                                placeholder="0"
+                                className={`w-full px-3 py-2 bg-emerald-50/40 border-2 border-emerald-500 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono ${
+                                  !restriction.allowed ? 'opacity-50 cursor-not-allowed' : ''
+                                }`}
+                                placeholder=""
                               />
                             </div>
 
@@ -2142,14 +3070,18 @@ export const OACModule: React.FC<OACModuleProps> = ({
                                 type="number"
                                 min="0"
                                 value={hanVal}
+                                disabled={!restriction.allowed}
                                 onChange={(e) => {
                                   const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
                                   setEditDonnees({ ...editDonnees, handicapes: val });
                                 }}
-                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-                                placeholder="0"
+                                className={`w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono ${
+                                  !restriction.allowed ? 'opacity-50 cursor-not-allowed' : ''
+                                }`}
+                                placeholder=""
                               />
                             </div>
+
 
                             <div>
                               <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">
@@ -2164,7 +3096,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                                   setEditDonnees({ ...editDonnees, morts: val });
                                 }}
                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-                                placeholder="0"
+                                placeholder=""
                               />
                             </div>
                           </div>
@@ -2194,7 +3126,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   })()}
 
                   {/* ─────────────────────────────────────────────────────────────
-                      TYPE 3: COMMANDE (Choix ID + Modif paramètres de commande)
+                      TYPE 3: COMMANDE
                      ───────────────────────────────────────────────────────────── */}
                   {sType === 'Commande' && (
                     <div className="space-y-3">
@@ -2213,13 +3145,14 @@ export const OACModule: React.FC<OACModuleProps> = ({
                               approveIdChoisi ? 'border-emerald-500 bg-emerald-50/30' : 'border-slate-300'
                             }`}
                           >
-                            <option value="">-- Choisir un ID disponible --</option>
-                            <option value={selectedSoumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`}>
-                              {selectedSoumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`} — Suggéré
-                            </option>
-                            <option value="OAC-2609-003">OAC-2609-003 — Disponible (Dépenses)</option>
-                            <option value="OAC-2609-004">OAC-2609-004 — Disponible (Dépenses)</option>
-                            <option value="OAC-2609-005">OAC-2609-005 — Disponible (Dépenses)</option>
+                            <option value="">-- Choisir un ID --</option>
+                            {recentOacList
+                              .map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.id} — (Récemment créé)
+                                </option>
+                              ))
+                            }
                           </select>
                           <input
                             type="text"
@@ -2309,13 +3242,62 @@ export const OACModule: React.FC<OACModuleProps> = ({
                           </div>
 
                           <div>
-                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Date d'incubation</label>
+                            <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">
+                              Date d'incubation
+                              {/* ✅ v1.3.11 : hint visuel pour rappeler la règle */}
+                              <span className="ml-1 text-[9px] font-normal text-slate-500 italic">(J+21 = éclosion, max 6j après réception)</span>
+                            </label>
                             <input
                               type="date"
-                              value={editDonnees.date || ''}
-                              onChange={(e) => setEditDonnees({ ...editDonnees, date: e.target.value })}
+                              // ✅ v1.3.11 : Afficher la VRAIE date d'incubation (et non la date de réception/commande)
+                              value={(() => {
+                                const di = editDonnees.dateIncubation;
+                                if (!di) return '';
+                                if (di.includes('-')) return di; // déjà ISO yyyy-mm-dd
+                                // Convertir dd/mm/yyyy → yyyy-mm-dd pour l'input type="date"
+                                const p = di.split('/');
+                                return p.length === 3 ? `${p[2]}-${p[1]}-${p[0]}` : di;
+                              })()}
+                              onChange={(e) => {
+                                // ✅ v1.3.11 : Stocker la date d'incubation en ISO (yyyy-mm-dd)
+                                //   et recalculer la date d'éclosion automatiquement (dateIncub + 21j)
+                                const newDateIncub = e.target.value;
+                                let newEclosion = '';
+                                if (newDateIncub) {
+                                  const p = newDateIncub.split('-');
+                                  if (p.length === 3) {
+                                    const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+                                    d.setDate(d.getDate() + 21);
+                                    newEclosion = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                                  }
+                                }
+                                setEditDonnees({
+                                  ...editDonnees,
+                                  dateIncubation: newDateIncub,
+                                  eclosion: newEclosion, // ✅ recalculée automatiquement
+                                });
+                              }}
                               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
                             />
+                            {/* ✅ v1.3.11 : Aperçu de la date d'éclosion calculée */}
+                            {editDonnees.dateIncubation && (
+                              <div className="mt-1 text-[10px] text-slate-600 font-medium">
+                                → Éclosion prévue : <span className="text-[#16a34a] font-bold">
+                                  {editDonnees.eclosion || (() => {
+                                    const di = editDonnees.dateIncubation;
+                                    const p = di.includes('-') ? di.split('-') : di.split('/');
+                                    if (p.length === 3) {
+                                      const d = di.includes('-')
+                                        ? new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))
+                                        : new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
+                                      d.setDate(d.getDate() + 21);
+                                      return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                                    }
+                                    return '--';
+                                  })()}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -2360,7 +3342,12 @@ export const OACModule: React.FC<OACModuleProps> = ({
                       <button
                         type="button"
                         onClick={confirmApprove}
-                        className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] shadow-sm flex items-center gap-1.5 cursor-pointer"
+                        disabled={isBatchLocked && (sType === 'Mirage' || sType === 'Éclosion')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] shadow-sm flex items-center gap-1.5 ${
+                          isBatchLocked && (sType === 'Mirage' || sType === 'Éclosion')
+                            ? 'opacity-50 cursor-not-allowed'
+                            : 'cursor-pointer'
+                        }`}
                       >
                         <span>✔</span>
                         <span>Confirmer l'approbation</span>

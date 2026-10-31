@@ -31,7 +31,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('touchstart', unlockAudio, { passive: true });
 }
 
-export function playAlertSound(type: 'rejection' | 'success' | 'warning' = 'rejection') {
+export function playAlertSound(type: 'rejection' | 'success' | 'warning' | 'error' | 'notification' | 'approve' | 'reject' = 'rejection') {
   try {
     const ctx = getAudioContext();
     if (!ctx) return;
@@ -42,12 +42,12 @@ export function playAlertSound(type: 'rejection' | 'success' | 'warning' = 'reje
 
     const now = ctx.currentTime;
 
-    if (type === 'rejection') {
-      // 3-tone descending alarm buzzer for rejection / correction alert
+    if (type === 'rejection' || type === 'reject') {
+      // Descending buzzer
       const tones = [
-        { freq: 587.33, start: 0, dur: 0.18, type: 'sawtooth' as OscillatorType }, // D5
-        { freq: 440.00, start: 0.22, dur: 0.18, type: 'sawtooth' as OscillatorType }, // A4
-        { freq: 293.66, start: 0.44, dur: 0.35, type: 'square' as OscillatorType }, // D4
+        { freq: 587.33, start: 0, dur: 0.18, type: 'sawtooth' as OscillatorType },
+        { freq: 440.00, start: 0.22, dur: 0.18, type: 'sawtooth' as OscillatorType },
+        { freq: 293.66, start: 0.44, dur: 0.35, type: 'square' as OscillatorType },
       ];
 
       tones.forEach((t) => {
@@ -63,36 +63,23 @@ export function playAlertSound(type: 'rejection' | 'success' | 'warning' = 'reje
         osc.stop(now + t.start + t.dur);
       });
 
-      // Mobile phone vibration pattern
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        try {
-          navigator.vibrate([250, 100, 250, 100, 400]);
-        } catch {
-          // ignore if vibration blocked
-        }
+        try { navigator.vibrate([250, 100, 250, 100, 400]); } catch {}
       }
-    } else if (type === 'success') {
-      // 3-tone pleasant ascending chime
+    } else if (type === 'success' || type === 'approve') {
+      // Ascending chime
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(523.25, now); // C5
-      osc.frequency.setValueAtTime(659.25, now + 0.12); // E5
-      osc.frequency.setValueAtTime(783.99, now + 0.24); // G5
+      osc.frequency.setValueAtTime(523.25, now);
+      osc.frequency.setValueAtTime(659.25, now + 0.12);
+      osc.frequency.setValueAtTime(783.99, now + 0.24);
       gain.gain.setValueAtTime(0.25, now);
       gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(now);
       osc.stop(now + 0.5);
-
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        try {
-          navigator.vibrate(100);
-        } catch {
-          // ignore
-        }
-      }
     } else if (type === 'warning') {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -105,6 +92,30 @@ export function playAlertSound(type: 'rejection' | 'success' | 'warning' = 'reje
       gain.connect(ctx.destination);
       osc.start(now);
       osc.stop(now + 0.3);
+    } else if (type === 'error') {
+      // Short buzz
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(220, now);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.2);
+    } else if (type === 'notification') {
+      // Short beep
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, now);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.1);
     }
   } catch (err) {
     console.warn('Audio playback error:', err);

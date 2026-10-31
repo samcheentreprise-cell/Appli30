@@ -13,7 +13,10 @@ import {
   ShieldAlert,
   KeyRound,
   Activity,
-  Smartphone
+  Smartphone,
+  Plus,
+  Loader2,
+  Save
 } from 'lucide-react';
 import { 
   getGSheetWebappUrl, 
@@ -22,7 +25,9 @@ import {
   setGSheetApiToken, 
   DEFAULT_API_URL, 
   DEFAULT_API_TOKEN,
-  ping 
+  ping,
+  getEmailsAdmins,
+  saveEmailsAdmins
 } from '../services/googleSheet';
 
 interface SyncStatus {
@@ -44,12 +49,15 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
   onResetAllData,
   onClose,
 }) => {
-  // Alert Emails State
-  const [emailList, setEmailList] = useState<string[]>(() => {
-    const stored = localStorage.getItem('alert_emails');
-    return stored ? JSON.parse(stored) : ['admin@couvoirsamche.com'];
-  });
+  // ✅ Emails administrateurs — chargés depuis GAS au montage du composant.
+  //    Aucun cache local : la liste est serveur-side (PropertiesService).
+  const [emailList, setEmailList] = useState<string[]>([]);
   const [newEmail, setNewEmail] = useState('');
+  const [emailsLoading, setEmailsLoading] = useState(true);
+  const [emailsSaving, setEmailsSaving] = useState(false);
+  const [emailsMsg, setEmailsMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [emailsSource, setEmailsSource] = useState<'script_properties' | 'default' | null>(null);
+
   const [gsheetUrl, setGsheetUrl] = useState(() => getGSheetWebappUrl());
   const [apiToken, setApiToken] = useState(() => getGSheetApiToken());
 
@@ -60,9 +68,37 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
   const [resetSuccessToast, setResetSuccessToast] = useState(false);
   const [pingStatus, setPingStatus] = useState<{ testing: boolean; message?: string; success?: boolean } | null>(null);
 
+  // ✅ Chargement des emails depuis GAS au montage du composant.
   useEffect(() => {
-    localStorage.setItem('alert_emails', JSON.stringify(emailList));
-  }, [emailList]);
+    let cancelled = false;
+    const load = async () => {
+      setEmailsLoading(true);
+      try {
+        const res = await getEmailsAdmins();
+        if (cancelled) return;
+        if (res.success && Array.isArray(res.emails)) {
+          setEmailList(res.emails);
+          setEmailsSource(res.source || null);
+          setEmailsMsg(null);
+        } else {
+          setEmailsMsg({
+            type: 'error',
+            text: 'Impossible de charger les emails administrateurs depuis le serveur.'
+          });
+        }
+      } catch (e: any) {
+        if (cancelled) return;
+        setEmailsMsg({
+          type: 'error',
+          text: `Erreur de chargement : ${e?.message || e}`
+        });
+      } finally {
+        if (!cancelled) setEmailsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const saveGsheetUrl = () => {
     setGSheetWebappUrl(gsheetUrl);
@@ -110,15 +146,87 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
     }
   };
 
-  const addEmail = () => {
-    if (newEmail && !emailList.includes(newEmail)) {
-      setEmailList([...emailList, newEmail]);
-      setNewEmail('');
+  // ✅ NOUVEAU — Gestion des emails administrateurs via GAS.
+  //    Tout se passe en ligne, rien en cache local.
+
+  // Ajouter un email à la liste locale (sera sauvegardé sur « Enregistrer »)
+  const handleAddEmail = () => {
+    const e = newEmail.trim().toLowerCase();
+    if (!e) {
+      setEmailsMsg({ type: 'error', text: 'Veuillez saisir une adresse email.' });
+      return;
+    }
+    if (!e.includes('@') || e.lastIndexOf('.') < e.indexOf('@')) {
+      setEmailsMsg({ type: 'error', text: 'Adresse email invalide.' });
+      return;
+    }
+    if (emailList.includes(e)) {
+      setEmailsMsg({ type: 'info', text: 'Cette adresse est déjà dans la liste.' });
+      return;
+    }
+    setEmailList([...emailList, e]);
+    setNewEmail('');
+    setEmailsMsg(null);
+  };
+
+  // Retirer un email de la liste locale
+  const handleRemoveEmail = (email: string) => {
+    setEmailList(emailList.filter((e) => e !== email));
+  };
+
+  // Recharger la liste depuis le serveur (annule les modifications locales)
+  const handleReloadEmails = async () => {
+    setEmailsLoading(true);
+    try {
+      const res = await getEmailsAdmins();
+      if (res.success && Array.isArray(res.emails)) {
+        setEmailList(res.emails);
+        setEmailsSource(res.source || null);
+        setEmailsMsg({ type: 'info', text: 'Liste rechargée depuis le serveur.' });
+      } else {
+        setEmailsMsg({ type: 'error', text: 'Échec du rechargement.' });
+      }
+    } catch (e: any) {
+      setEmailsMsg({ type: 'error', text: `Erreur : ${e?.message || e}` });
+    } finally {
+      setEmailsLoading(false);
+      setTimeout(() => setEmailsMsg(null), 3500);
     }
   };
 
-  const removeEmail = (email: string) => {
-    setEmailList(emailList.filter((e) => e !== email));
+  // Sauvegarder la liste complète côté serveur
+  const handleSaveEmails = async () => {
+    if (emailList.length === 0) {
+      setEmailsMsg({ type: 'error', text: 'Au moins un email administrateur est obligatoire.' });
+      return;
+    }
+    setEmailsSaving(true);
+    try {
+      const res = await saveEmailsAdmins(emailList);
+      if (res.success) {
+        setEmailList(res.emails); // Utiliser la liste nettoyée renvoyée par GAS
+        setEmailsMsg({
+          type: 'success',
+          text: `✅ ${res.total} email(s) enregistré(s) sur le serveur.`
+        });
+        if (res.invalides && res.invalides.length > 0) {
+          setEmailsMsg({
+            type: 'info',
+            text: `${res.total} email(s) enregistré(s). ${res.invalides.length} adresse(s) invalide(s) ignorée(s) : ${res.invalides.join(', ')}`
+          });
+        }
+      } else {
+        setEmailsMsg({
+          type: 'error',
+          text: `Échec : ${res.message || 'Erreur inconnue'}`
+        });
+      }
+    } catch (e: any) {
+      setEmailsMsg({ type: 'error', text: `Erreur : ${e?.message || e}` });
+    } finally {
+      setEmailsSaving(false);
+      setTimeout(() => setEmailsMsg(null), 5000);
+    }
   };
 
   const handleConfirmReset = () => {
@@ -323,42 +431,120 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
           </div>
         </section>
 
-        {/* 2. Alertes Email */}
+        {/* 2. Alertes Email — Gestion via l'application (sauvegarde serveur) */}
         <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-            <Mail className="w-4 h-4 text-amber-600" />
-            <h2 className="text-base font-bold text-slate-800">Alertes Email & Notifications</h2>
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Mail className="w-4 h-4 text-amber-600" />
+              <h2 className="text-base font-bold text-slate-800">Alertes Email & Notifications</h2>
+            </div>
+            {emailsSource === 'default' && (
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                Config par défaut
+              </span>
+            )}
+            {emailsSource === 'script_properties' && (
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
+                Config serveur
+              </span>
+            )}
           </div>
 
+          <p className="text-xs text-slate-600">
+            Les destinataires des notifications email sont stockés côté serveur
+            (Google Apps Script → <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-[11px]">emails_admins</code>).
+            Modifiez-les ici — tout le monde utilise la même liste.
+          </p>
+
+          {/* Formulaire d'ajout */}
           <div className="flex flex-col sm:flex-row gap-2">
             <input
               type="email"
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddEmail(); } }}
               placeholder="nouvelle.alerte@couvoir.com"
               className="flex-1 px-3.5 py-2 border rounded-xl text-xs bg-slate-50 border-slate-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
             />
-            <button 
-              onClick={addEmail} 
-              className="px-4 py-2 bg-[#1B4F72] hover:bg-[#153e5a] text-white rounded-xl font-bold text-xs transition cursor-pointer"
+            <button
+              onClick={handleAddEmail}
+              className="px-4 py-2 bg-[#1B4F72] hover:bg-[#153e5a] text-white rounded-xl font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
             >
+              <Plus className="w-3.5 h-3.5" />
               Ajouter
             </button>
           </div>
 
+          {/* Liste des emails */}
           <div className="space-y-2">
-            {emailList.map((email) => (
-              <div key={email} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-200">
-                <span className="text-xs font-medium text-slate-700">{email}</span>
-                <button 
-                  onClick={() => removeEmail(email)} 
-                  className="text-rose-500 hover:text-rose-700 font-bold text-xs px-2 py-1 rounded-lg hover:bg-rose-50 transition cursor-pointer"
-                >
-                  Supprimer
-                </button>
+            {emailsLoading ? (
+              <div className="flex items-center gap-2 text-xs text-slate-500 p-3">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Chargement depuis le serveur…</span>
               </div>
-            ))}
+            ) : emailList.length === 0 ? (
+              <div className="text-xs text-slate-400 italic p-3 text-center">
+                Aucun email administrateur configuré.
+              </div>
+            ) : (
+              emailList.map((email) => (
+                <div key={email} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  <span className="text-xs font-medium text-slate-700 break-all">{email}</span>
+                  <button
+                    onClick={() => handleRemoveEmail(email)}
+                    className="text-rose-500 hover:text-rose-700 font-bold text-xs px-2 py-1 rounded-lg hover:bg-rose-50 transition cursor-pointer flex items-center gap-1 shrink-0"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Supprimer
+                  </button>
+                </div>
+              ))
+            )}
           </div>
+
+          {/* Messages de feedback */}
+          {emailsMsg && (
+            <div
+              className={`p-3 rounded-xl text-xs font-medium border transition ${
+                emailsMsg.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : emailsMsg.type === 'error'
+                    ? 'bg-rose-50 text-rose-800 border-rose-200'
+                    : 'bg-sky-50 text-sky-800 border-sky-200'
+              }`}>
+              {emailsMsg.text}
+            </div>
+          )}
+
+          {/* Boutons d'action */}
+          <div className="flex flex-col sm:flex-row gap-2 pt-2">
+            <button
+              onClick={handleSaveEmails}
+              disabled={emailsSaving || emailList.length === 0}
+              className="flex-1 px-5 py-2.5 bg-[#27AE60] hover:bg-[#1E8449] disabled:opacity-50 text-white rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {emailsSaving ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Save className="w-3.5 h-3.5" />
+              )}
+              {emailsSaving ? 'Sauvegarde…' : 'Enregistrer sur le serveur'}
+            </button>
+            <button
+              onClick={handleReloadEmails}
+              disabled={emailsLoading}
+              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${emailsLoading ? 'animate-spin' : ''}`} />
+              Recharger
+            </button>
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            ℹ️ Astuce : si aucun email n'est configuré, le serveur utilise l'adresse par défaut
+            <code className="bg-slate-100 px-1 py-0.5 rounded ml-1 font-mono text-[10px]">couvoirsamche@gmail.com</code>.
+            Les changements sont effectifs immédiatement après « Enregistrer ».
+          </p>
         </section>
 
         {/* 3. Maintenance & Nettoyage du Cache */}

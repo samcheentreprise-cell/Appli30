@@ -5,15 +5,18 @@ import { Users, Plus, Search, Phone, Mail, MapPin } from 'lucide-react';
 interface ClientsModuleProps {
   clients: Client[];
   onAddClient: (client: Client) => void;
+  onUpdateClient: (client: Client) => void;
 }
 
 export const ClientsModule: React.FC<ClientsModuleProps> = ({
   clients,
   onAddClient,
+  onUpdateClient,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCity, setSelectedCity] = useState<string>('Toutes');
   const [isOpenModal, setIsOpenModal] = useState(false);
+  const [editingClient, setEditingClient] = useState<Client | null>(null);
 
   const [formData, setFormData] = useState<Partial<Client>>({
     prenom: '',
@@ -30,18 +33,33 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({
     if (!formData.nom) return;
 
     const label = `${formData.prenom || ''} ${formData.nom}`.trim();
-    const newClient: Client = {
-      index: clients.length + 2,
-      prenom: formData.prenom || '',
-      nom: formData.nom,
-      ville: formData.ville || 'Bamako',
-      telephone: formData.telephone || '',
-      email: formData.email || '',
-      label,
-    };
-
-    onAddClient(newClient);
+    
+    if (editingClient) {
+      const updatedClient: Client = {
+        ...editingClient,
+        prenom: formData.prenom || '',
+        nom: formData.nom,
+        ville: formData.ville || 'Bamako',
+        telephone: formData.telephone || '',
+        email: formData.email || '',
+        label,
+      };
+      onUpdateClient(updatedClient);
+    } else {
+      const newClient: Client = {
+        index: clients.length + 2,
+        prenom: formData.prenom || '',
+        nom: formData.nom,
+        ville: formData.ville || 'Bamako',
+        telephone: formData.telephone || '',
+        email: formData.email || '',
+        label,
+      };
+      onAddClient(newClient);
+    }
+    
     setIsOpenModal(false);
+    setEditingClient(null);
     setFormData({
       prenom: '',
       nom: '',
@@ -162,10 +180,23 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({
                 <span className="text-xs text-slate-400 italic">Pas de téléphone</span>
               )}
 
-              <span className="text-[11px] font-semibold text-slate-400">
-                Client #{client.index || idx + 1}
-              </span>
-            </div>
+                <button
+                  onClick={() => {
+                    setEditingClient(client);
+                    setFormData({
+                      prenom: client.prenom,
+                      nom: client.nom,
+                      ville: client.ville,
+                      telephone: client.telephone,
+                      email: client.email,
+                    });
+                    setIsOpenModal(true);
+                  }}
+                  className="text-[11px] font-bold text-emerald-600 hover:text-emerald-800"
+                >
+                  Modifier
+                </button>
+              </div>
           </div>
         ))}
       </div>
@@ -179,7 +210,9 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({
                 <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-600">
                   <Users className="w-5 h-5" />
                 </div>
-                <h3 className="text-lg font-bold text-slate-900">Nouveau Client</h3>
+                <h3 className="text-lg font-bold text-slate-900">
+                  {editingClient ? 'Modifier le Client' : 'Nouveau Client'}
+                </h3>
               </div>
               <button
                 onClick={() => setIsOpenModal(false)}

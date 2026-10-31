@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getGSheetWebappUrl, setGSheetWebappUrl, SyncResult } from '../services/googleSheet';
+import { getGSheetWebappUrl, setGSheetWebappUrl, SyncResult, DEFAULT_API_URL } from '../services/googleSheet';
 import { 
   RefreshCw, 
   CheckCircle2, 
@@ -92,7 +92,7 @@ function doPost(e) {
   };
 
   const handleRestoreWorkingUrl = () => {
-    const workingUrl = 'https://script.google.com/macros/s/AKfycbwZLonbfs4JZLyF9WIYIwx1KbcPBH8rshwNKBeYEtwPwlxIhZkA1JmZRoWf3u4V6B_IsA/exec';
+    const workingUrl = DEFAULT_API_URL;
     setCustomUrl(workingUrl);
     setGSheetWebappUrl(workingUrl);
     setIsEditingUrl(false);
@@ -117,7 +117,7 @@ function doPost(e) {
   };
 
   const handleResetUrl = () => {
-    const defaultUrl = 'https://script.google.com/macros/s/AKfycbwZLonbfs4JZLyF9WIYIwx1KbcPBH8rshwNKBeYEtwPwlxIhZkA1JmZRoWf3u4V6B_IsA/exec';
+    const defaultUrl = DEFAULT_API_URL;
     setCustomUrl(defaultUrl);
     setGSheetWebappUrl(defaultUrl);
     setIsEditingUrl(false);

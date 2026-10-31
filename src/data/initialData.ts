@@ -39,7 +39,148 @@ export const CATEGORIES_DEPENSES_SHEET = [
 ];
 
 export const INITIAL_SOUMISSIONS: SoumissionEnAttente[] = [];
-export const INITIAL_OAC: OAC[] = [];
+export const INITIAL_OAC: OAC[] = [
+  {
+    _v: 25,
+    ligne: 7,
+    id: 'OAC-2609-005',
+    date: '15/10/2026',
+    dateIncubation: '16/10/2026',
+    type: 'Chairs',
+    race: 'Ross 308',
+    fournisseur: 'Pak tavuk',
+    cartons: 54,
+    recus: 19440,
+    nbCasses: 118,
+    cubes: 19322,
+    eclosion: '06/11/2026',
+    clairs: 0,
+    fertiles: 19322,
+    attendus: 16000,
+    commerciaux: 0,
+    nes: 0,
+    morts: 0,
+    handicapes: 0,
+    pourVente: 0,
+    tauxEclosion: 0,
+    tauxIncubation: 0,
+    statut: 'En incubation',
+    complet: false,
+    verrouillee: false,
+  },
+  {
+    _v: 25,
+    ligne: 6,
+    id: 'OAC-2609-004',
+    date: '05/10/2026',
+    dateIncubation: '07/10/2026',
+    type: 'Chairs',
+    race: 'Ross 308',
+    fournisseur: 'Pak tavuk',
+    cartons: 54,
+    recus: 19440,
+    nbCasses: 201,
+    cubes: 19239,
+    eclosion: '28/10/2026',
+    clairs: 0,
+    fertiles: 19039,
+    attendus: 16397,
+    commerciaux: 0,
+    nes: 0,
+    morts: 0,
+    handicapes: 0,
+    pourVente: 0,
+    tauxEclosion: 0,
+    tauxIncubation: 0,
+    statut: 'En incubation',
+    complet: false,
+    verrouillee: false,
+  },
+  {
+    _v: 25,
+    ligne: 5,
+    id: 'OAC-2609-003',
+    date: '24/09/2026',
+    dateIncubation: '26/09/2026',
+    type: 'Chairs',
+    race: 'Ross 308',
+    fournisseur: 'Pak tavuk',
+    cartons: 53,
+    recus: 19080,
+    nbCasses: 247,
+    cubes: 18833,
+    eclosion: '17/10/2026',
+    clairs: 2830,
+    fertiles: 16003,
+    attendus: 14125,
+    commerciaux: 14199,
+    nes: 14199,
+    morts: 150,
+    handicapes: 285,
+    pourVente: 13915,
+    tauxEclosion: 0.767,
+    tauxIncubation: 0.777,
+    statut: 'Éclos',
+    complet: true,
+    verrouillee: false,
+  },
+  {
+    _v: 25,
+    ligne: 4,
+    id: 'OAC-2609-002',
+    date: '14/09/2026',
+    dateIncubation: '16/09/2026',
+    type: 'Chairs',
+    race: 'Ross 308',
+    fournisseur: 'Pak tavuk',
+    cartons: 54,
+    recus: 19440,
+    nbCasses: 90,
+    cubes: 19350,
+    eclosion: '07/10/2026',
+    clairs: 987,
+    fertiles: 18363,
+    attendus: 16472,
+    commerciaux: 16186,
+    nes: 16186,
+    morts: 100,
+    handicapes: 225,
+    pourVente: 15862,
+    tauxEclosion: 0.849,
+    tauxIncubation: 0.853,
+    statut: 'Éclos',
+    complet: true,
+    verrouillee: false,
+  },
+  {
+    _v: 25,
+    ligne: 3,
+    id: 'OAC-2609-001',
+    date: '11/09/2026',
+    dateIncubation: '13/09/2026',
+    type: 'Chairs',
+    race: 'Ross 308',
+    fournisseur: 'Pak tavuk',
+    cartons: 54,
+    recus: 19440,
+    nbCasses: 150,
+    cubes: 19290,
+    eclosion: '04/10/2026',
+    clairs: 1690,
+    fertiles: 17600,
+    attendus: 14468,
+    commerciaux: 15980,
+    nes: 15980,
+    morts: 126,
+    handicapes: 315,
+    pourVente: 15660,
+    tauxEclosion: 0.845,
+    tauxIncubation: 0.851,
+    statut: 'Éclos',
+    complet: true,
+    verrouillee: false,
+  },
+];
 export const INITIAL_CLIENTS: Client[] = [];
 export const INITIAL_FACTURES: Facture[] = [];
 export const INITIAL_DEPENSES: Depense[] = [];
@@ -65,6 +206,25 @@ export function getStoredData<T>(key: string, defaultVal: T): T {
         ) {
           localStorage.removeItem(`samche_${key}`);
           return defaultVal;
+        }
+
+        if (key === 'oac') {
+          return parsed.map((item: any) => {
+            const raw = String(item.statut || '').trim();
+            let st = raw;
+            if (/^eclos$/i.test(raw) || /^éclos$/i.test(raw) || item.id === 'OAC-2609-001' || item.id === 'OAC-2609-002') {
+              st = 'Éclos';
+            } else if (/^incubation$/i.test(raw) || /^en incubation$/i.test(raw)) {
+              st = 'En incubation';
+            } else if (/^mire$/i.test(raw) || /^miré$/i.test(raw)) {
+              st = 'Miré';
+            }
+            return {
+              ...item,
+              statut: st,
+              complet: st === 'Éclos' || item.complet,
+            };
+          }) as T;
         }
 
         if (key === 'ventes') {

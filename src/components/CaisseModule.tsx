@@ -38,8 +38,8 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
   });
   const [typeMvt, setTypeMvt] = useState<string>('Encaissement vente');
   const [detail, setDetail] = useState<string>('');
-  const [montantEntree, setMontantEntree] = useState<string>('0');
-  const [montantSortie, setMontantSortie] = useState<string>('0');
+  const [montantEntree, setMontantEntree] = useState<string>('');
+  const [montantSortie, setMontantSortie] = useState<string>('');
   const [observation, setObservation] = useState<string>('');
 
   // Table search
@@ -104,8 +104,8 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
     setDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     setTypeMvt('Encaissement vente');
     setDetail('');
-    setMontantEntree('0');
-    setMontantSortie('0');
+    setMontantEntree('');
+    setMontantSortie('');
     setObservation('');
   };
 
@@ -123,8 +123,8 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
     }
     setTypeMvt(m.type || 'Encaissement vente');
     setDetail(m.detail && m.detail !== '--' ? m.detail : '');
-    setMontantEntree(m.entree ? String(m.entree) : '0');
-    setMontantSortie(m.sortie ? String(m.sortie) : '0');
+    setMontantEntree(m.entree ? String(m.entree) : '');
+    setMontantSortie(m.sortie ? String(m.sortie) : '');
     setObservation(m.observation || '');
   };
 
@@ -421,7 +421,7 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
                   type="number"
                   min="0"
                   step="1"
-                  placeholder="0"
+                  placeholder=""
                   value={montantEntree}
                   onChange={(e) => setMontantEntree(e.target.value)}
                   className="w-full px-3 py-2 bg-[#ECFDF5] border border-[#6EE7B7] rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:bg-white focus:border-[#059669]"
@@ -439,7 +439,7 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
                   type="number"
                   min="0"
                   step="1"
-                  placeholder="0"
+                  placeholder=""
                   value={montantSortie}
                   onChange={(e) => setMontantSortie(e.target.value)}
                   className="w-full px-3 py-2 bg-[#FEF2F2] border border-[#FCA5A5] rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:bg-white focus:border-[#DC2626]"

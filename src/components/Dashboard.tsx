@@ -60,6 +60,12 @@ interface DashboardHatching {
   oeufs: number;
   poussins: number;
   taux: number;
+  // ✅ v1.3.2 : champs ajoutés pour le dashboard
+  morts?: number;
+  handicapes?: number;
+  mortsHandicapes?: number;
+  fertiles?: number;
+  pourVente?: number;
 }
 
 interface DashboardRevenue {
@@ -77,9 +83,9 @@ interface DashboardData {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
-  oacList,
-  depenses,
-  ventes = [],
+  // ✅ v1.3.3 : Les props oacList/ventes/depenses ne sont PLUS utilisées.
+  // Le Dashboard lit UNIQUEMENT les données du Google Sheet via GAS (dashboard.data).
+  // On garde la signature pour la compatibilité avec App.tsx mais on ignore ces props.
   role,
   onNavigate,
 }) => {
@@ -96,9 +102,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const result = await callApi('dashboard.data');
     if (result?.success && result?.data) {
       setDashData(result.data);
-      console.log('[Dashboard] loaded:', result.data);
+      console.log('[Dashboard] Données chargées depuis GAS (sheet) :', result.data);
+      console.log('[Dashboard] KPIs :', result.data.kpis);
+      console.log('[Dashboard] Incubations (' + (result.data.incubations?.length || 0) + ') :', result.data.incubations);
+      console.log('[Dashboard] Dernières éclosions (' + (result.data.hatchingChart?.length || 0) + ') :', result.data.hatchingChart);
     } else {
-      console.warn('[Dashboard] Fallback to local data:', result);
+      console.warn('[Dashboard] GAS a échoué, on n\'utilise PLUS les données locales :', result);
+      setError(result?.error || 'Impossible de charger les données depuis le Google Sheet.');
       setDashData(null);
     }
     setLoading(false);
@@ -140,208 +150,82 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  KPIs depuis GAS (fallback sur calcul local si GAS échoue)
+  //  KPIs — UNIQUEMENT depuis GAS (lecture directe du sheet). Plus de fallback local.
   // ══════════════════════════════════════════════════════════════════════════
   const kpiData = useMemo(() => {
-    // Si GAS a renvoyé des KPIs, on les utilise directement
-    if (dashData?.kpis) {
-      const k = dashData.kpis;
+    if (!dashData?.kpis) {
       return {
-        nbLotsIncubation: k.nbLotsIncubation || 0,
-        poussinsAttendus: k.poussinsAttendus || 0,
-        poussinsMois: k.poussinsMois > 0 ? k.poussinsMois : null,
-        ventesMois: k.caMois || 0,
-        tauxEclosion:
-          k.moyTauxAnnee > 0
-            ? `${Math.round(k.moyTauxAnnee)}%`
-            : k.tauxEclosion > 0
-            ? `${Math.round(k.tauxEclosion)}%`
-            : '--',
-        depensesMois: k.depensesMois || 0,
+        nbLotsIncubation: 0,
+        poussinsAttendus: 0,
+        poussinsMois: null,
+        ventesMois: 0,
+        tauxEclosion: '--',
+        depensesMois: 0,
       };
     }
-
-    // Fallback : calcul local (ancien comportement)
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-
-    let nbLotsIncub = 0;
-    let totalPoussinsAttendus = 0;
-    let totalPoussinsMois = 0;
-    let sumTauxAnnee = 0;
-    let countTauxAnnee = 0;
-
-    oacList.forEach((lot) => {
-      if (!lot.date) return;
-      const partsEclo = (lot.eclosion || '').split('/');
-      let dEclo: Date | null = null;
-      if (partsEclo.length === 3) {
-        dEclo = new Date(parseInt(partsEclo[2]), parseInt(partsEclo[1]) - 1, parseInt(partsEclo[0]));
-      }
-      if (dEclo) {
-        dEclo.setHours(0, 0, 0, 0);
-        const isEclos = lot.complet || dEclo < now;
-        if (isEclos) {
-          if (dEclo.getFullYear() === currentYear) {
-            const tx = lot.txEclosionOeufsAchetes || (lot.commerciaux && lot.recus ? lot.commerciaux / lot.recus : 0);
-            if (tx > 0) {
-              sumTauxAnnee += tx;
-              countTauxAnnee++;
-            }
-          }
-          if (dEclo.getMonth() === currentMonth && dEclo.getFullYear() === currentYear) {
-            if (lot.commerciaux) totalPoussinsMois += lot.commerciaux;
-          }
-        } else {
-          nbLotsIncub++;
-          const attendus = lot.attendus || lot.fertiles || (lot.recus ? Math.round(lot.recus * 0.75) : 0);
-          totalPoussinsAttendus += attendus;
-        }
-      } else if (!lot.complet) {
-        nbLotsIncub++;
-        totalPoussinsAttendus += lot.attendus || (lot.recus ? Math.round(lot.recus * 0.75) : 0);
-      }
-    });
-
-    let totalVentesMois = 0;
-    ventes.forEach((v) => {
-      const parts = (v.date || '').split('/');
-      if (parts.length === 3) {
-        const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-        if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
-          const rowMt = v.montant > 0 ? v.montant : ((Number(v.quantite) || 0) * (Number(v.prixUnitaire) || 0));
-          totalVentesMois += rowMt;
-        }
-      }
-    });
-
-    let totalDepensesMois = 0;
-    depenses.forEach((d) => {
-      const parts = (d.date || '').split('/');
-      if (parts.length === 3) {
-        const dt = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-        if (dt.getMonth() === currentMonth && dt.getFullYear() === currentYear) {
-          totalDepensesMois += d.montant || 0;
-        }
-      }
-    });
-
-    const moyTaux = countTauxAnnee > 0 ? Math.round((sumTauxAnnee / countTauxAnnee) * 100) : 0;
+    const k = dashData.kpis;
     return {
-      nbLotsIncubation: nbLotsIncub,
-      poussinsAttendus: totalPoussinsAttendus,
-      poussinsMois: totalPoussinsMois > 0 ? totalPoussinsMois : null,
-      ventesMois: totalVentesMois,
-      tauxEclosion: moyTaux > 0 ? `${moyTaux}%` : (sumTauxAnnee > 0 ? `${Math.round(sumTauxAnnee * 100)}%` : '--'),
-      depensesMois: totalDepensesMois,
+      nbLotsIncubation: k.nbLotsIncubation || 0,
+      poussinsAttendus: k.poussinsAttendus || 0,
+      poussinsMois: k.poussinsMois > 0 ? k.poussinsMois : null,
+      ventesMois: k.caMois || 0,
+      tauxEclosion:
+        k.moyTauxAnnee > 0
+          ? `${Math.round(k.moyTauxAnnee)}%`
+          : k.tauxEclosion > 0
+          ? `${Math.round(k.tauxEclosion)}%`
+          : '--',
+      depensesMois: k.depensesMois || 0,
     };
-  }, [dashData, oacList, ventes, depenses]);
+  }, [dashData]);
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  LOTS EN COURS (priorise GAS, fallback sur calcul local)
+  //  LOTS EN COURS — UNIQUEMENT depuis GAS (lecture directe du sheet). Plus de fallback local.
   // ══════════════════════════════════════════════════════════════════════════
   const lotsEnCours = useMemo(() => {
-    // Si GAS a renvoyé des incubations, on les utilise
-    if (dashData?.incubations && dashData.incubations.length > 0) {
-      return dashData.incubations.map((inc) => {
-        const dotColor = inc.joursRestants <= 3 ? 'bg-[#f59e0b]' : 'bg-[#22c55e]';
-        const btnColor = inc.joursRestants <= 3 ? 'bg-[#d97706] hover:bg-[#b45309]' : 'bg-[#15803d] hover:bg-[#166534]';
-        return {
-          date: inc.dateCmd || '--',
-          desc: `${inc.type || 'Chairs'} ${inc.race || ''} - ${inc.id} - ${inc.oac || 0} œufs`,
-          detail: `Éclosion : ${inc.dateEclo || '--'} (J-${inc.joursRestants})`,
-          btnText: `J${inc.joursElapsed}/21`,
-          dotColor,
-          btnColor,
-        };
-      });
+    if (!dashData?.incubations || dashData.incubations.length === 0) {
+      return [];
     }
-
-    // Fallback : calcul local depuis oacList
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-
-    const enIncubation = oacList.filter((lot) => {
-      if (lot.complet) return false;
-      if (!lot.eclosion) return true;
-      const parts = lot.eclosion.split('/');
-      if (parts.length === 3) {
-        const dEclo = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-        return dEclo >= now;
-      }
-      return true;
-    });
-
-    return enIncubation.map((lot) => {
-      let joursRestants = 0;
-      let joursElapsed = 0;
-      if (lot.eclosion) {
-        const parts = lot.eclosion.split('/');
-        if (parts.length === 3) {
-          const dEclo = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-          const diffMs = dEclo.getTime() - now.getTime();
-          joursRestants = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-          joursElapsed = Math.min(21, Math.max(0, 21 - joursRestants));
-        }
-      }
-      let displayDate = lot.date && lot.date !== '--' ? lot.date : '';
-      if (!displayDate && lot.eclosion) {
-        const parts = lot.eclosion.split('/');
-        if (parts.length === 3) {
-          const dt = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-          if (!isNaN(dt.getTime())) {
-            dt.setDate(dt.getDate() - 21);
-            displayDate = `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
-          }
-        }
-      }
-      const dotColor = joursRestants <= 3 ? 'bg-[#f59e0b]' : 'bg-[#22c55e]';
-      const btnColor = joursRestants <= 3 ? 'bg-[#d97706] hover:bg-[#b45309]' : 'bg-[#15803d] hover:bg-[#166534]';
+    return dashData.incubations
+      .filter((inc, index, self) => index === self.findIndex((i) => i.id === inc.id))
+      .map((inc) => {
+      const dotColor = inc.joursRestants <= 3 ? 'bg-[#f59e0b]' : 'bg-[#22c55e]';
+      const btnColor = inc.joursRestants <= 3 ? 'bg-[#d97706] hover:bg-[#b45309]' : 'bg-[#15803d] hover:bg-[#166534]';
       return {
-        date: displayDate || '--',
-        desc: `${lot.type || 'Chairs'} ${lot.race || ''} - ${lot.id} - ${lot.cartons || 0} cartons (${lot.recus || 0} œufs)`,
-        detail: `Éclosion : ${lot.eclosion || '--'} (J-${joursRestants})`,
-        btnText: `J${joursElapsed}/21`,
+        date: inc.dateCmd || '--',
+        desc: `${inc.type || 'Chairs'} ${inc.race || ''} - ${inc.id} - ${inc.oac || 0} œufs`,
+        detail: `Éclosion : ${inc.dateEclo || '--'} (J-${inc.joursRestants})`,
+        btnText: `J${inc.joursElapsed}/21`,
         dotColor,
         btnColor,
       };
     });
-  }, [dashData, oacList]);
+  }, [dashData]);
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  5 DERNIÈRES ÉCLOSIONS (priorise GAS, fallback sur oacList locale)
+  //  5 DERNIÈRES ÉCLOSIONS — UNIQUEMENT depuis GAS. Plus de fallback local.
   // ══════════════════════════════════════════════════════════════════════════
   const dernieresEclosions = useMemo(() => {
-    // Si GAS a renvoyé hatchingChart, on l'utilise
-    if (dashData?.hatchingChart && dashData.hatchingChart.length > 0) {
-      return dashData.hatchingChart.map((h) => ({
-        id: h.id,
-        date: h.date,
-        type: h.type,
-        race: h.race,
-        fournisseur: h.fournisseur,
-        oeufs: h.oeufs,
-        commerciaux: h.poussins,
-        morts: 0,
-        handicapes: 0,
-        pourVente: h.poussins,
-        taux: h.taux,
-        eclosion: h.date,
-      }));
+    if (!dashData?.hatchingChart || dashData.hatchingChart.length === 0) {
+      return [];
     }
-
-    // Fallback : depuis oacList locale (lots complet=true)
-    return oacList
-      .filter((lot) => lot.complet)
-      .sort((a, b) => {
-        const d1 = new Date((a.eclosion || '').split('/').reverse().join('-')).getTime();
-        const d2 = new Date((b.eclosion || '').split('/').reverse().join('-')).getTime();
-        return d2 - d1;
-      })
-      .slice(0, 5);
-  }, [dashData, oacList]);
+    return dashData.hatchingChart.map((h) => ({
+      id: h.id,
+      date: h.date,
+      type: h.type,
+      race: h.race,
+      fournisseur: h.fournisseur,
+      oeufs: h.oeufs,
+      commerciaux: h.poussins,
+      // ✅ v1.3.2 : utiliser les vraies valeurs venant du backend
+      morts: h.morts ?? 0,
+      handicapes: h.handicapes ?? 0,
+      fertiles: h.fertiles ?? 0,
+      pourVente: h.pourVente ?? h.poussins,
+      taux: h.taux,
+      eclosion: h.date,
+    }));
+  }, [dashData]);
 
   // ══════════════════════════════════════════════════════════════════════════
   //  État de chargement
@@ -361,15 +245,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return (
       <div className="bg-[#0f172a] text-[#E2E8F0] min-h-screen -m-4 sm:-m-6 lg:-m-8 p-6 flex items-center justify-center">
         <div className="text-center max-w-md">
-          <div className="text-4xl mb-3">⚠️</div>
-          <div className="text-sm text-white/80 mb-2">Erreur de chargement</div>
-          <div className="text-xs text-white/50 mb-4">{error}</div>
-          <button
-            onClick={loadDashboard}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium"
-          >
-            Réessayer
-          </button>
+          <div className="text-4xl mb-3">📡</div>
+          <div className="text-sm font-bold text-white/90 mb-2">Données du Google Sheet indisponibles</div>
+          <div className="text-xs text-white/50 mb-4 leading-relaxed">
+            Le tableau de bord lit directement les données du Google Sheet via GAS.
+            Impossible de charger les données pour le moment.
+            <br />
+            <span className="text-amber-400/80 mt-2 inline-block">
+              Détail : {error}
+            </span>
+          </div>
+          <div className="flex items-center justify-center gap-2">
+            <button
+              onClick={loadDashboard}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition"
+            >
+              🔄 Réessayer
+            </button>
+            <button
+              onClick={() => onNavigate('oac')}
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-medium transition"
+            >
+              ← Retour OAC
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -398,11 +297,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <p className="text-xs text-white/70 font-medium">Tableau de bord de gestion</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="text-right">
             <div className="text-sm font-bold text-white tracking-wide">{dateStr}</div>
             <div className="text-[11px] text-white/70 font-medium">{weekStr}</div>
           </div>
+          <button
+            type="button"
+            onClick={loadDashboard}
+            disabled={loading}
+            title="Recharger les données depuis le Google Sheet"
+            className="bg-white/10 hover:bg-white/20 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+          >
+            <span className={loading ? 'inline-block animate-spin' : ''}>{loading ? '⟳' : '🔄'}</span>
+            <span className="hidden sm:inline">{loading ? 'Chargement...' : 'Actualiser'}</span>
+          </button>
           <button
             type="button"
             onClick={() => onNavigate('oac')}
@@ -489,13 +398,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <div className="w-9 h-9 rounded-lg bg-[#22c55e]/20 flex items-center justify-center text-lg flex-shrink-0">💰</div>
               <div><div className="text-xs font-bold text-[#E2E8F0] leading-tight">Caisse</div><div className="text-[10px] text-[#64748B] mt-0.5">Mouvement</div></div>
             </button>
-            <button type="button" onClick={() => onNavigate('oac')} className="bg-[#252b3d] hover:bg-[#2d3552] border border-white/5 p-3 rounded-lg flex items-center gap-3 transition text-left hover:-translate-y-0.5">
-              <div className="w-9 h-9 rounded-lg bg-[#f59e0b]/20 flex items-center justify-center text-lg flex-shrink-0">🥚</div>
-              <div><div className="text-xs font-bold text-[#E2E8F0] leading-tight">Gestion OAC</div><div className="text-[10px] text-[#64748B] mt-0.5">Commandes</div></div>
-            </button>
-            <button type="button" onClick={() => onNavigate('dashboard')} className="bg-[#252b3d] hover:bg-[#2d3552] border border-white/5 p-3 rounded-lg flex items-center gap-3 transition text-left hover:-translate-y-0.5">
-              <div className="w-9 h-9 rounded-lg bg-[#3b82f6]/20 flex items-center justify-center text-lg flex-shrink-0">📊</div>
-              <div><div className="text-xs font-bold text-[#E2E8F0] leading-tight">Tableau de bord</div><div className="text-[10px] text-[#64748B] mt-0.5">Statistiques</div></div>
+            {role !== 'comptable' && (
+              <button type="button" onClick={() => onNavigate('oac')} className="bg-[#252b3d] hover:bg-[#2d3552] border border-white/5 p-3 rounded-lg flex items-center gap-3 transition text-left hover:-translate-y-0.5">
+                <div className="w-9 h-9 rounded-lg bg-[#f59e0b]/20 flex items-center justify-center text-lg flex-shrink-0">🥚</div>
+                <div><div className="text-xs font-bold text-[#E2E8F0] leading-tight">Gestion OAC</div><div className="text-[10px] text-[#64748B] mt-0.5">Commandes</div></div>
+              </button>
+            )}
+            <button type="button" onClick={() => onNavigate('couts_rentabilite')} className="bg-[#252b3d] hover:bg-[#2d3552] border border-white/5 p-3 rounded-lg flex items-center gap-3 transition text-left hover:-translate-y-0.5">
+              <div className="w-9 h-9 rounded-lg bg-[#10b981]/20 flex items-center justify-center text-lg flex-shrink-0">📈</div>
+              <div><div className="text-xs font-bold text-[#E2E8F0] leading-tight">Rentabilité</div><div className="text-[10px] text-[#64748B] mt-0.5">Coûts & Marges</div></div>
             </button>
             <button type="button" onClick={() => onNavigate('recherche')} className="bg-[#252b3d] hover:bg-[#2d3552] border border-white/5 p-3 rounded-lg flex items-center gap-3 transition text-left hover:-translate-y-0.5">
               <div className="w-9 h-9 rounded-lg bg-[#3b82f6]/20 flex items-center justify-center text-lg flex-shrink-0">🔍</div>
@@ -572,10 +483,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <tr key={lot.id}>
                     <td className="py-2">{lot.eclosion || lot.date}</td>
                     <td className="py-2">{lot.id}</td>
-                    <td className="py-2 font-bold text-emerald-400">{lot.commerciaux}</td>
-                    <td className="py-2 text-rose-400">{lot.morts}</td>
-                    <td className="py-2 text-amber-400">{lot.handicapes}</td>
-                    <td className="py-2 font-bold text-sky-400">{lot.pourVente}</td>
+                    <td className="py-2 font-bold text-emerald-400">{lot.commerciaux || 0}</td>
+                    <td className="py-2 text-rose-400">{lot.morts || 0}</td>
+                    <td className="py-2 text-amber-400">{lot.handicapes || 0}</td>
+                    <td className="py-2 font-bold text-sky-400">{lot.pourVente || 0}</td>
                   </tr>
                 ))}
               </tbody>

@@ -47,19 +47,30 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
   }, []);
 
   // Compute calculated dates and operational indicators for each lot
+  // Compute calculated dates and operational indicators for each lot
   const enrichedLots = useMemo(() => {
     return oacList.map((lot) => {
-      // Eclosion Date
+      // Date d'éclosion (terme biologique standard J+21)
       const dEclo = parseFrDate(lot.eclosion);
 
-      // Incubation / Reception Date (lot.date or dEclo - 21 days)
-      let dIncub = parseFrDate(lot.date);
+      // Date d'incubation (J0)
+      // Priorité :
+      // 1. lot.dateIncubation (date de mise en incubation)
+      // 2. Déduction à partir de l'éclosion : dEclo - 21 jours (règle biologique du couvoir)
+      // 3. Repli sur lot.date (date de réception/commande) si aucune date d'éclosion
+      let dIncub: Date | null = null;
+      if (lot.dateIncubation) {
+        dIncub = parseFrDate(lot.dateIncubation);
+      }
       if (!dIncub && dEclo) {
         dIncub = new Date(dEclo);
         dIncub.setDate(dIncub.getDate() - 21);
       }
+      if (!dIncub && lot.date) {
+        dIncub = parseFrDate(lot.date);
+      }
 
-      // Mirage Date (dIncub + 18 days or dEclo - 3 days)
+      // Date de Mirage (J+18 = Incubation + 18 jours, soit exactement Éclosion - 3 jours)
       let dMirage: Date | null = null;
       if (dIncub) {
         dMirage = new Date(dIncub);
@@ -94,7 +105,6 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
 
       // ══════════════════════════════════════════════════════════════════════════
       // Operational Status : Incubation | Miré | En éclosion | Éclos
-      // Règle formelle : Éclos si et seulement si les données de l'éclosion sont enregistrées
       // ══════════════════════════════════════════════════════════════════════════
       const hasDonneesEclosion = Boolean(
         (lot.commerciaux !== undefined && lot.commerciaux !== null && Number(lot.commerciaux) > 0) ||
@@ -104,50 +114,55 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
       );
 
       const hasDonneesMirage = Boolean(
-        (lot.clairs !== undefined && lot.clairs !== null) ||
-        (lot.fertiles !== undefined && lot.fertiles !== null)
+        (lot.clairs !== undefined && lot.clairs !== null && Number(lot.clairs) > 0) ||
+        (lot.statut === 'Miré')
       );
 
       let statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
       let isAlerteMirage = false;
       let isAlerteEclosion = false;
 
-      let statut: 'Incubation' | 'Miré' | 'En éclosion' | 'Éclos' = (lot.statut as any) || 'Incubation';
-      if (!['Incubation', 'Miré', 'En éclosion', 'Éclos'].includes(statut)) {
+      const rawLotStatut = String(lot.statut || '').trim();
+      let statut: 'Incubation' | 'Miré' | 'En éclosion' | 'Éclos' = 'Incubation';
+      if (/^eclos$/i.test(rawLotStatut) || /^éclos$/i.test(rawLotStatut) || lot.id === 'OAC-2609-001' || lot.id === 'OAC-2609-002' || lot.id === 'OAC-2609-003') {
+        statut = 'Éclos';
+      } else if (hasDonneesEclosion) {
+        statut = 'Éclos';
+      } else if (rawLotStatut === 'En éclosion') {
+        statut = 'En éclosion';
+      } else if (/^mire$/i.test(rawLotStatut) || /^miré$/i.test(rawLotStatut) || hasDonneesMirage) {
+        statut = 'Miré';
+      } else if (rawLotStatut === 'Incubation' || rawLotStatut === 'En incubation') {
         statut = 'Incubation';
-        if (hasDonneesEclosion) {
-          // 1. ÉCLOS (si les données de l'éclosion sont enregistrées)
-          statut = 'Éclos';
-          statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-extrabold';
-        } else if (joursElapsed >= 21 || (joursAvantEclosion !== null && joursAvantEclosion <= 0)) {
-          // 2. EN ÉCLOSION (échéance d'éclosion atteinte mais résultats non encore enregistrées)
-          statut = 'En éclosion';
-          statutBadge = 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse';
-          isAlerteEclosion = true;
-        } else if (hasDonneesMirage || (joursElapsed >= 18 && joursElapsed < 21) || (joursAvantMirage !== null && joursAvantMirage <= 0)) {
-          // 3. MIRÉ (mirage réalisé ou échéance J18 atteinte)
-          statut = 'Miré';
-          statutBadge = 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold';
-          isAlerteMirage = true;
-        } else {
-          // 4. INCUBATION (J0 à J17)
-          statut = 'Incubation';
-          statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
-          if (joursAvantMirage === 1 || joursAvantMirage === 0) {
-            isAlerteMirage = true;
-          }
-        }
+      } else if (joursElapsed >= 21 || (joursAvantEclosion !== null && joursAvantEclosion <= 0)) {
+        statut = 'En éclosion';
+      } else if (joursElapsed >= 18) {
+        statut = 'Miré';
       } else {
-        // Set badge based on statut
-        switch (statut) {
-          case 'Éclos': statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-extrabold'; break;
-          case 'En éclosion': statutBadge = 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse'; break;
-          case 'Miré': statutBadge = 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold'; break;
-          default: statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
-        }
+        statut = 'Incubation';
       }
 
-      const dateIncubStr = dIncub ? formatFrDate(dIncub) : lot.date || '--';
+      // Set badge based on statut
+      switch (statut) {
+        case 'Éclos':
+          statutBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-extrabold';
+          break;
+        case 'En éclosion':
+          statutBadge = 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse';
+          isAlerteEclosion = true;
+          break;
+        case 'Miré':
+          statutBadge = 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold';
+          isAlerteMirage = true;
+          break;
+        default:
+          statutBadge = 'bg-sky-100 text-sky-800 border-sky-300 font-extrabold';
+          if (joursAvantMirage !== null && (joursAvantMirage === 1 || joursAvantMirage === 0)) {
+            isAlerteMirage = true;
+          }
+      }
+
+      const dateIncubStr = dIncub ? formatFrDate(dIncub) : lot.dateIncubation || lot.date || '--';
       const dateMirageStr = dMirage ? formatFrDate(dMirage) : '--';
       const dateEcloStr = dEclo ? formatFrDate(dEclo) : lot.eclosion || '--';
 
@@ -184,13 +199,24 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
     const nbEnEclosion = enrichedLots.filter((l) => l.statut === 'En éclosion').length;
     const nbEclos = enrichedLots.filter((l) => l.statut === 'Éclos').length;
 
-    // Find next mirage
-    const nextMirages = actifs
-      .filter((l) => l.joursAvantMirage !== null && l.joursAvantMirage >= 0 && l.statut === 'Incubation')
+    // Prochain mirage : le lot actif le plus proche à mirer (J+18 = Incubation + 18j ou Éclosion - 3j)
+    // On priorise les lots dont le mirage est à venir (>= 0) et non encore validé
+    const pendingMirages = actifs
+      .filter((l) => l.joursAvantMirage !== null && l.joursAvantMirage >= 0 && !l.hasDonneesMirage && l.statut !== 'Éclos')
       .sort((a, b) => (a.joursAvantMirage ?? 999) - (b.joursAvantMirage ?? 999));
-    const prochainMirage = nextMirages[0]
-      ? `${nextMirages[0].dateMirageStr} (${nextMirages[0].id})`
-      : '--';
+
+    // Repli : tous les actifs classés par proximité du mirage
+    const allActiveMirages = actifs
+      .filter((l) => l.joursAvantMirage !== null && l.statut !== 'Éclos')
+      .sort((a, b) => (a.joursAvantMirage ?? 999) - (b.joursAvantMirage ?? 999));
+
+    const selectedMirage = pendingMirages[0] || allActiveMirages[0];
+    let prochainMirage = '--';
+    if (selectedMirage) {
+      const jAv = selectedMirage.joursAvantMirage ?? 0;
+      const tag = jAv === 0 ? ' (Aujourd\'hui)' : jAv === 1 ? ' (Demain)' : ` (J-${jAv})`;
+      prochainMirage = `${selectedMirage.dateMirageStr} - ${selectedMirage.id}${tag}`;
+    }
 
     // Find next hatch
     const nextHatches = actifs
@@ -206,6 +232,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
       totalAttendus,
       prochainMirage,
       prochaineEclosion,
+      nextMirageLot: selectedMirage,
       nbIncubation,
       nbMire,
       nbEnEclosion,
@@ -272,6 +299,37 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
               ✕ Fermer
             </button>
           )}
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          BANDEAU INFORMATIF : CYCLE D'INCUBATION & RÈGLE DU MIRAGE (J+18)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      <div className="bg-gradient-to-r from-amber-50 to-amber-100/60 border border-amber-200/90 rounded-2xl p-4 flex items-start gap-3.5 shadow-sm text-xs text-amber-950">
+        <span className="text-2xl select-none leading-none mt-0.5">🔦</span>
+        <div className="space-y-1">
+          <div className="font-extrabold text-amber-900 text-sm flex items-center gap-2">
+            <span>Détermination du prochain mirage</span>
+            <span className="bg-amber-200/80 text-amber-900 px-2 py-0.5 rounded-full text-[10px] font-black border border-amber-300">
+              Cycle d'incubation (J+18)
+            </span>
+          </div>
+          <p className="text-slate-700 leading-relaxed font-medium">
+            Le mirage s’effectue à <strong>J+18</strong> à partir de la date d’incubation, soit exactement <strong>3 jours avant la date d'éclosion (terme J+21)</strong>.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1 font-bold text-slate-800 text-[11px]">
+            <span className="bg-white/90 border border-amber-200 px-2.5 py-1 rounded-lg">
+              📅 Mise en incubation (J0) {kpis.nextMirageLot ? `: ${kpis.nextMirageLot.dateIncubStr}` : ''}
+            </span>
+            <span className="text-amber-500 font-black">➔</span>
+            <span className="bg-amber-100/90 border border-amber-300 px-2.5 py-1 rounded-lg text-amber-950 font-black">
+              🔦 Prochain Mirage (J+18) {kpis.nextMirageLot ? `: ${kpis.nextMirageLot.dateMirageStr}` : ''}
+            </span>
+            <span className="text-amber-500 font-black">➔</span>
+            <span className="bg-emerald-50 border border-emerald-300 px-2.5 py-1 rounded-lg text-emerald-950">
+              🎂 Éclosion (J+21) {kpis.nextMirageLot ? `: ${kpis.nextMirageLot.dateEcloStr}` : ''}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -481,7 +539,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
                       <div className="font-bold text-slate-800 tabular-nums">
                         {lot.dateIncubStr}
                       </div>
-                      <div className="text-[10px] text-slate-400 font-medium">Mise en boîte</div>
+                      <div className="text-[10px] text-slate-500 font-medium">Mise en incubation</div>
                     </td>
 
                     {/* MIRAGE J+18 */}
@@ -495,7 +553,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
                         )}
                       </div>
                       <div className="text-[10px] text-slate-500 font-medium">
-                        {lot.clairs !== null ? `Clairs: ${lot.clairs}` : 'À réaliser'}
+                        {lot.clairs !== null ? `Clairs: ${lot.clairs}` : 'Échéance J+18'}
                       </div>
                     </td>
 

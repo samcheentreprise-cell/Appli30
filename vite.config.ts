@@ -7,11 +7,24 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({ mode }) => {
   const isProd = mode === 'production';
   return {
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              return id.toString().split('node_modules/')[1].split('/')[0].toString();
+            }
+          }
+        }
+      },
+      chunkSizeWarningLimit: 1000
+    },
     plugins: [
       react(), 
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
         manifest: {
           id: '/',
           name: 'Couvoir SAMCHE',
@@ -23,9 +36,9 @@ export default defineConfig(({ mode }) => {
           start_url: '/',
           scope: '/',
           icons: [
-            { src: '/logo-samche.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-            { src: '/logo-samche.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-            { src: '/logo-samche.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' }
+            { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
           ],
         },
         devOptions: {
@@ -43,9 +56,13 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       host: '0.0.0.0',
       allowedHosts: true,
-      // Disable HMR
+      // ✅ CORRECTION v1.2.7 : désactiver EXPLICITEMENT le HMR pour Cloud Run
+      //    (le WebSocket de Vite n'est pas supporté par Cloud Run).
+      //    Note : `middlewareMode` est forcé à `true` côté server.ts,
+      //    on ne peut donc pas le désactiver ici — l'erreur résiduelle
+      //    est supprimée côté client via index.html.
       hmr: false,
-      watch: (isProd || process.env.DISABLE_HMR === 'true') ? null : {},
+      watch: null, // Toujours null — désactive le watcher de fichiers (inutile sur Cloud Run)
     },
   };
 });

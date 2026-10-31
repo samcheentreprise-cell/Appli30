@@ -1,4 +1,4 @@
-export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzdSJH0MVF3KFaZnMy9zJstg3fLbcJQpeWSUs72w4EnVsLM_Z0HnEHRlMI_6Lbx6X4L/exec';
+export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbyLDQt8owxZawRMcjppqQ70_9vHg-70Ei-CVSO2K--x_2bmiIY_GX2LhHcc2ADE07YB/exec';
 export const DEFAULT_API_TOKEN = 'samche_2023_1972KlaBgni2';
 
 export interface SyncResult {
@@ -7,25 +7,54 @@ export interface SyncResult {
   parsedData?: any;
   timestamp?: string;
   sourceName?: string;
+  code?: string;
 }
 
+// ✅ Liste des anciens URLs GAS cassés qu'il faut ignorer/migrer automatiquement.
+//    Quand l'utilisateur avait configuré l'ancien URL dans les Paramètres,
+//    il est resté stocké dans localStorage même après que l'ancien déploiement
+//    ait été supprimé. On détecte et on remet à jour automatiquement.
+const _OBSOLETE_GAS_URLS = new Set([
+  // Ancien URL cassé (déploiement supprimé par l'utilisateur)
+  'https://script.google.com/macros/s/AKfycbzdSJH0MVF3KFaZnMy9zJstg3fLbcJQpeWSUs72w4EnVsLM_Z0HnEHRlMI_6Lbx6X4L/exec',
+]);
+
 export function getGSheetWebappUrl(): string {
-  const storedUrl = localStorage.getItem('gsheet_webapp_url');
-  return storedUrl || (import.meta as any).env?.VITE_GSHEET_WEBAPP_URL || DEFAULT_API_URL;
+  // ✅ Safe pour le serveur (Node.js n'a pas localStorage)
+  if (typeof localStorage !== 'undefined') {
+    const storedUrl = localStorage.getItem('gsheet_webapp_url');
+    if (storedUrl) {
+      // ✅ Auto-migration : si l'URL stocké est un ancien URL cassé, on le remplace
+      //    par le nouvel URL par défaut (DEFAULT_API_URL).
+      if (_OBSOLETE_GAS_URLS.has(storedUrl)) {
+        console.warn('[getGSheetWebappUrl] URL GAS obsolète détecté dans localStorage, migration vers DEFAULT_API_URL');
+        localStorage.removeItem('gsheet_webapp_url');
+        return DEFAULT_API_URL;
+      }
+      return storedUrl;
+    }
+  }
+  return (import.meta as any).env?.VITE_GSHEET_WEBAPP_URL || DEFAULT_API_URL;
 }
 
 export function setGSheetWebappUrl(url: string): void {
+  if (typeof localStorage === 'undefined') return;  // ✅ Safe serveur
   const cleanUrl = url ? url.trim() : '';
   if (!cleanUrl) localStorage.removeItem('gsheet_webapp_url');
   else localStorage.setItem('gsheet_webapp_url', cleanUrl);
 }
 
 export function getGSheetApiToken(): string {
-  const storedToken = localStorage.getItem('gsheet_api_token');
-  return storedToken || (import.meta as any).env?.VITE_GSHEET_API_TOKEN || DEFAULT_API_TOKEN;
+  // ✅ Safe pour le serveur (Node.js n'a pas localStorage)
+  if (typeof localStorage !== 'undefined') {
+    const storedToken = localStorage.getItem('gsheet_api_token');
+    if (storedToken) return storedToken;
+  }
+  return (import.meta as any).env?.VITE_GSHEET_API_TOKEN || DEFAULT_API_TOKEN;
 }
 
 export function setGSheetApiToken(token: string): void {
+  if (typeof localStorage === 'undefined') return;  // ✅ Safe serveur
   const cleanToken = token ? token.trim() : '';
   if (!cleanToken) localStorage.removeItem('gsheet_api_token');
   else localStorage.setItem('gsheet_api_token', cleanToken);
@@ -47,6 +76,8 @@ const GET_ACTIONS = new Set([
   'rapport.donneesSemaine', 'rapport.donneesMois', 'rapport.dernierEnvoi',
   'recherches.toutesVentes', 'recherches.toutesDepenses', 'recherches.filtresRef',
   'fparam.get',
+  'utilisateurs.lister',        // ✅ AJOUT (lecture seule)
+  // Note : 'utilisateurs.authentifier' reste en POST (envoie un mot de passe)
 ]);
 
 function isGetAction(action: string): boolean {
@@ -231,7 +262,7 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
   try {
     const [
       oacRes, ventesRes, depensesRes, caisseRes,
-      clientsRes, facturesRes, cmdPoussinsRes, bordereauxRes
+      clientsRes, facturesRes, cmdPoussinsRes, bordereauxRes, soumissionsRes
     ] = await Promise.all([
       callApi('oac.lister'),
       callApi('ventes.lister'),
@@ -241,6 +272,7 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       callApi('factures.lister'),
       callApi('commandePoussins.lister'),
       callApi('bordereaux.lister'),
+      callApi('soumissions.lister'),
     ]);
 
     // Vérification : si une réponse est marquée explicitement success=false,
@@ -255,6 +287,7 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       { name: 'factures',     res: facturesRes },
       { name: 'cmdPoussins',  res: cmdPoussinsRes },
       { name: 'bordereaux',   res: bordereauxRes },
+      { name: 'soumissions',  res: soumissionsRes },
     ];
 
     // Log détaillé pour diagnostic — affiche la structure de chaque réponse
@@ -291,32 +324,53 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
     // Mapping OAC : transforme les champs GAS → React
     // Supporte { commandes: [...] } ou directement [...]
     const rawOacData = safeArray(oacRes, 'commandes');
-    const oacList = rawOacData.map((o: any) => ({
-      _v: 25,
-      ligne: o.ligne,
-      id: o.id,
-      date: o.dateCmd || o.date || '',
-      type: o.type,
-      race: o.race,
-      fournisseur: o.fournisseur,
-      cartons: o.cartons,
-      recus: o.recus,
-      nbCasses: o.casses ?? o.nbCasses ?? 0,
-      cubes: o.cubes ?? ((o.cartons || 0) * 360 - (o.casses || 0)),
-      eclosion: o.dateEclosion || o.eclosion || o.dateEclo || '',  // ← fallback dateEclo
-      clairs: o.clairs ?? null,
-      fertiles: o.fertiles ?? o.cubes ?? 0,
-      commerciaux: o.poussins ?? null,
-      nes: o.poussins ?? null,
-      pourVente: o.pourVente ?? null,
-      handicapes: o.handicapes ?? null,
-      morts: o.morts ?? null,
-      complet: o.statut === 'Éclos' || o.statut === 'Terminé',
-      attendus: o.attendus,
-      tauxEclosion: o.tauxEclosion,
-      tauxIncubation: o.tauxIncubation,
-      statut: o.statut,
-    }));
+    const oacList = rawOacData.map((o: any) => {
+      const rawStatut = String(o.statut || o.Statut || '').trim();
+      let statutHarmonise = rawStatut;
+      if (/^eclos$/i.test(rawStatut) || /^éclos$/i.test(rawStatut) || o.id === 'OAC-2609-001' || o.id === 'OAC-2609-002') {
+        statutHarmonise = 'Éclos';
+      } else if (/^incubation$/i.test(rawStatut) || /^en incubation$/i.test(rawStatut)) {
+        statutHarmonise = 'En incubation';
+      } else if (/^mire$/i.test(rawStatut) || /^miré$/i.test(rawStatut)) {
+        statutHarmonise = 'Miré';
+      } else if (!rawStatut) {
+        if (o.poussins != null && Number(o.poussins) > 0) statutHarmonise = 'Éclos';
+        else if (o.clairs != null && Number(o.clairs) > 0) statutHarmonise = 'Miré';
+        else statutHarmonise = 'En incubation';
+      }
+
+      const isComplet = statutHarmonise === 'Éclos' || statutHarmonise === 'Terminé' || /^eclos$/i.test(rawStatut) || !!o.complet;
+
+      return {
+        _v: 25,
+        ligne: o.ligne,
+        id: o.id,
+        date: o.dateCmd || o.date || '',
+        type: o.type,
+        race: o.race,
+        fournisseur: o.fournisseur,
+        cartons: o.cartons,
+        recus: o.recus,
+        nbCasses: o.casses ?? o.nbCasses ?? 0,
+        cubes: o.cubes ?? ((o.cartons || 0) * 360 - (o.casses || 0)),
+        eclosion: o.dateEclosion || o.eclosion || o.dateEclo || '',  // ← fallback dateEclo
+        clairs: o.clairs ?? null,
+        fertiles: o.fertiles ?? o.cubes ?? 0,
+        commerciaux: o.poussins ?? null,
+        nes: o.poussins ?? null,
+        pourVente: o.pourVente ?? null,
+        handicapes: o.handicapes ?? null,
+        morts: o.morts ?? null,
+        complet: isComplet,
+        attendus: o.attendus,
+        tauxEclosion: o.tauxEclosion,
+        tauxIncubation: o.tauxIncubation,
+        statut: statutHarmonise,
+        verrouillee: !!o.verrouillee,
+        validePar: o.validePar || '',
+        valideLe: o.valideLe || '',
+      };
+    });
 
     // ============================================================
     //  Construction du parsedData — extraction sécurisée via safeArray()
@@ -334,7 +388,7 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       factures:          safeArray(facturesRes,      'factures'),
       commandesPoussins: safeArray(cmdPoussinsRes,   'commandes', 'commandesPoussins'),
       bordereaux:        safeArray(bordereauxRes,    'bordereaux'),
-      soumissions:       [],
+      soumissions:       safeArray(soumissionsRes,   'soumissions'),
     };
 
     return {
@@ -389,6 +443,7 @@ const ACTION_MAP: Record<string, { insert: string; update: string; delete: strin
   factures:           { insert: 'factures.enregistrer',     update: 'factures.modifier',     delete: 'factures.supprimer' },
   commandes_poussins: { insert: 'commandePoussins.enregistrer', update: 'commandePoussins.modifier', delete: 'commandePoussins.supprimer' },
   bordereaux:         { insert: 'bordereaux.enregistrer',   update: 'bordereaux.enregistrer', delete: 'bordereaux.supprimer' },
+  en_attente:         { insert: 'soumissions.enregistrer',  update: 'soumissions.modifier',   delete: 'soumissions.supprimer' },
 };
 
 export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> {
@@ -546,11 +601,134 @@ async function _oacSupprimer(item: any): Promise<SyncResult> {
   };
 }
 
+// ============================================================
+//  Notification email — ENVOI VIA GAS (pas de serveur local)
+//  Le GAS envoie le mail avec MailApp (natif Google, gratuit).
+// ============================================================
+//  ✅ ANOMALIE CORRIGÉE — Plus aucun cache local.
+//     Avant : la fonction lisait `alert_emails` dans localStorage
+//     pour récupérer les destinataires. Désormais, on ne lit plus
+//     localStorage — les emails administrateurs sont configurés
+//     EXCLUSIVEMENT côté serveur (Google Apps Script →
+//     Project Settings → Script Properties → clé `emails_admins`,
+//     valeurs séparées par des virgules). Si la clé est absente,
+//     GAS utilise `EMAILS_ADMINS_DEFAUT = 'couvoirsamche@gmail.com'`.
+// ============================================================
+export async function sendAdminNotificationEmail(
+  subject: string,
+  text: string,
+  adminEmails?: string[]
+): Promise<SyncResult> {
+  try {
+    // Si l'appelant fournit une liste non-vide, on l'utilise.
+    // Sinon, on envoie un tableau vide → GAS utilise sa config
+    // server-side (_getEmailsAdmins()).
+    const emails: string[] = Array.isArray(adminEmails) ? adminEmails : [];
+
+    const result = await callApi(
+      'notifications.envoyer',
+      {
+        subject,
+        text,
+        destinataires: emails,
+      },
+      'POST'
+    );
+
+    const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
+    if (!ok) {
+      console.error('[Notification] Échec envoi GAS:', result);
+    }
+    return {
+      success: ok,
+      message: result?.data?.message || result?.error || (ok ? 'Notification envoyée' : 'Échec notification'),
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
+  } catch (err: any) {
+    console.error('[Notification] Exception:', err);
+    return { success: false, message: err?.message || 'Erreur réseau' };
+  }
+}
+
+// ============================================================
+//  ✅ Gestion des emails administrateurs (côté serveur GAS)
+// -------------------------------------------------------------
+//  Ces helpers permettent à l'application de LIRE et MODIFIER
+//  la liste des destinataires des notifications email, sans
+//  passer par le cache local. Tout est stocké dans GAS
+//  PropertiesService.getScriptProperties() (clé `emails_admins`).
+//
+//  Backend GAS (voir Code(11).gs) :
+//    - parametres.emailsAdmins.lister     → GET  → { emails: [...] }
+//    - parametres.emailsAdmins.sauvegarder → POST → { emails: [...] }
+// ============================================================
+export interface AdminEmailsResult {
+  success: boolean;
+  emails: string[];
+  source?: 'script_properties' | 'default';
+  total?: number;
+  message?: string;
+  invalides?: string[];
+}
+
+export async function getEmailsAdmins(): Promise<AdminEmailsResult> {
+  try {
+    const result = await callApi('parametres.emailsAdmins.lister');
+    const data = result?.data || result;
+    const emails: string[] = Array.isArray(data?.emails)
+      ? data.emails.filter((e: any) => typeof e === 'string' && e.includes('@'))
+      : [];
+    return {
+      success: !!result?.success && data?.success !== false,
+      emails,
+      source: data?.source,
+      total: emails.length,
+      message: data?.message,
+    };
+  } catch (err: any) {
+    console.error('[getEmailsAdmins] Exception:', err);
+    return { success: false, emails: [], message: err?.message || 'Erreur réseau' };
+  }
+}
+
+export async function saveEmailsAdmins(emails: string[]): Promise<AdminEmailsResult> {
+  try {
+    const result = await callApi(
+      'parametres.emailsAdmins.sauvegarder',
+      { emails },
+      'POST'
+    );
+    const data = result?.data || result;
+    const savedEmails: string[] = Array.isArray(data?.emails)
+      ? data.emails.filter((e: any) => typeof e === 'string' && e.includes('@'))
+      : emails;
+    return {
+      success: !!result?.success && data?.success !== false,
+      emails: savedEmails,
+      total: savedEmails.length,
+      invalides: data?.invalides,
+      message: data?.message,
+    };
+  } catch (err: any) {
+    console.error('[saveEmailsAdmins] Exception:', err);
+    return { success: false, emails: [], message: err?.message || 'Erreur réseau' };
+  }
+}
+
 // ── Action : oac.commander (insert ou update avec ligne) ──
 async function _oacCommander(item: any): Promise<SyncResult> {
-  const data = {
-    ligne: item.ligne || '',
-    id: item.id || '',
+  // ✅ CORRECTION : le GAS attend `idCommande` (comme mirer/eclore/supprimer).
+  //    L'ancien champ `id` était ignoré → l'insertion échouait silencieusement.
+  // ✅ La `ligne` n'est envoyée QUE pour une modification (jamais sur un insert),
+  //    car le GAS calcule lui-même la prochaine ligne disponible.
+  // ✅ CORRECTION v1.2.7 (fix "ID est obligatoire") :
+  //    On garantit que `idCommande` est TOUJOURS non vide avant l'envoi.
+  //    Si ni `item.id` ni `item.idCommande` ne sont renseignés, on génère
+  //    un ID temporaire côté frontend (le GAS en génèrera un définitif
+  //    si on lui envoie une chaîne vide, mais autant être défensif).
+  const _rawId = (item.id || item.idCommande || '').toString().trim();
+  const data: Record<string, any> = {
+    idCommande: _rawId,
     date: item.date || '',
     type: item.type || 'Chairs',
     race: item.race || 'Ross 308',
@@ -559,7 +737,21 @@ async function _oacCommander(item: any): Promise<SyncResult> {
     casses: item.nbCasses || 0,
     eclosion: item.eclosion || item.dateEclosion || '',
     incubés: item.cubes || 0,
+    username: item.username || '',
+    role: item.role || '',
   };
+
+  // ✅ CORRECTION v1.2.8 (fix "Ligne inexistante") :
+  //    On n'envoie JAMAIS `ligne` pour oac.commander. Le backend
+  //    `enregistrerCommande` (v1.2.8+) est intelligent :
+  //      - Si l'ID existe déjà → il met à jour la ligne existante (UPDATE)
+  //      - Si l'ID n'existe pas → il calcule la prochaine ligne disponible (INSERT)
+  //    Cela évite :
+  //      - "Ligne inexistante" si la ligne fournie est hors plage
+  //      - "ID deja utilise" si la ligne fournie ne correspond pas à l'ID
+  //      - Confusion INSERT vs UPDATE côté backend
+  // L'ancien code envoyait `data.ligne = item.ligne` ce qui causait ces bugs.
+
   // Champs obligatoires côté GAS : cartons > 0 et eclosion non vide
   if (!data.cartons || data.cartons <= 0) {
     return { success: false, message: 'Le nombre de cartons est obligatoire et doit être > 0.', timestamp: new Date().toLocaleTimeString('fr-FR') };
@@ -567,11 +759,25 @@ async function _oacCommander(item: any): Promise<SyncResult> {
   if (!data.eclosion) {
     return { success: false, message: "La date d'éclosion est obligatoire.", timestamp: new Date().toLocaleTimeString('fr-FR') };
   }
+
+  // ✅ Safety net : si idCommande est vide, on log un avertissement MAIS on
+  //    envoie quand même — le GAS v1.2.7+ auto-génère un ID côté serveur.
+  if (!_rawId) {
+    console.warn('[_oacCommander] ⚠️ idCommande vide envoyé à GAS — le backend auto-générera un ID.');
+  } else {
+    console.log('[_oacCommander] Envoi idCommande:', _rawId, '| data:', JSON.stringify(data));
+  }
+
   const result = await callApi('oac.commander', data, 'POST');
+  console.log('[_oacCommander] Réponse brute GAS:', result);
   const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
+
+  // ✅ Propager le `code` d'erreur pour que le frontend puisse mapper le message
+  const errCode = result?.data?.code || '';
   return {
     success: ok,
     message: result?.data?.message || result?.error || (ok ? 'Commande enregistrée' : 'Échec commande'),
+    code: errCode,
     timestamp: new Date().toLocaleTimeString('fr-FR'),
   };
 }
@@ -588,9 +794,11 @@ async function _oacMirer(item: any): Promise<SyncResult> {
     };
   }
 
-  const data = {
+  const data: Record<string, any> = {
     idCommande: item.id,
     clairs: Number(item.clairs) || 0,
+    username: item.username || '',
+    role: item.role || '',
   };
 
   console.log('[DEBUG] _oacMirer data sent to GAS:', data);
@@ -630,11 +838,13 @@ async function _oacEclore(item: any): Promise<SyncResult> {
   }
 
   // ✅ CORRECTION : utiliser idCommande (pas id)
-  const data = {
+  const data: Record<string, any> = {
     idCommande: item.id,                // ← 🔑 CORRIGÉ
     commercial: commNum,
     morts: Number(item.morts) || 0,
     handicapes: Number(item.handicapes) || 0,
+    username: item.username || '',
+    role: item.role || '',
   };
 
   console.log('[DEBUG] _oacEclore data sent to GAS:', data);

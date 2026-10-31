@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { CommandePoussin, Client, OAC, UserRole } from '../types';
 import { getFParamData } from '../services/googleSheet';
 
@@ -135,6 +135,8 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
 
   // Search State for "Chercher une Commande"
   const [searchTerm, setSearchTerm] = useState<string>('');
+  // ✅ Par défaut, ne pas afficher les commandes passées à l'affichage de la recherche
+  const [showPastOrders, setShowPastOrders] = useState<boolean>(false);
   const [editingCommande, setEditingCommande] = useState<CommandePoussin | null>(null);
   const [editQty, setEditQty] = useState<number>(1);
   const [editStatut, setEditStatut] = useState<'En attente' | 'Confirmée' | 'Livrée' | 'Annulée'>('En attente');
@@ -371,15 +373,98 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     );
   }, [clients, clientSearch]);
 
+  // ✅ Détection des commandes passées (date d'éclosion antérieure à aujourd'hui 00:00 ou déjà livrées)
+  const isCommandePassee = useCallback((cmd: CommandePoussin): boolean => {
+    const dateStr = (cmd.dateEclosion || (cmd as any).eclosion || '').trim();
+    if (dateStr) {
+      const d = parseFrDate(dateStr);
+      if (d) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return d.getTime() < today.getTime();
+      }
+    }
+    // Si statut Livrée ou Annulée sans date future explicite
+    if (cmd.statut === 'Livrée' || cmd.statutLivraison === 'Livré') {
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Total des commandes passées dans la base
+  const totalCommandesPassees = useMemo(() => {
+    return commandes.filter((c) => isCommandePassee(c)).length;
+  }, [commandes, isCommandePassee]);
+
   // Filtered orders for "Chercher"
+  // ✅ Par défaut (showPastOrders === false) : NE PAS afficher les commandes passées
   const filteredCommandes = useMemo(() => {
     const q = searchTerm?.toLowerCase().trim();
-    if (!q) return commandes;
     return commandes.filter((c) => {
-      const full = `${c.id} ${c.prenom} ${c.nom} ${c.ville || ''} ${c.tel || ''}`?.toLowerCase();
+      const isPast = isCommandePassee(c);
+      if (!showPastOrders && isPast) {
+        return false;
+      }
+      if (!q) return true;
+      const full = `${c.id} ${c.prenom} ${c.nom} ${c.ville || ''} ${c.tel || ''} ${c.dateEclosion || (c as any).eclosion || ''}`.toLowerCase();
       return full.includes(q);
     });
-  }, [commandes, searchTerm]);
+  }, [commandes, searchTerm, showPastOrders, isCommandePassee]);
+
+  // Si recherche textuelle active et commandes passées masquées, compter celles qui correspondent
+  const pastMatchesCount = useMemo(() => {
+    const q = searchTerm?.toLowerCase().trim();
+    if (!q || showPastOrders) return 0;
+    return commandes.filter((c) => {
+      if (!isCommandePassee(c)) return false;
+      const full = `${c.id} ${c.prenom} ${c.nom} ${c.ville || ''} ${c.tel || ''} ${c.dateEclosion || (c as any).eclosion || ''}`.toLowerCase();
+      return full.includes(q);
+    }).length;
+  }, [commandes, searchTerm, showPastOrders, isCommandePassee]);
+
+  // ✅ NOUVEAU : Commandes groupées par date d'éclosion (pour la vue "Chercher")
+  // Retourne un tableau trié : [{ dateEclosion, commandes: [...] }, ...]
+  // Tri : dates à venir chronologiques d'abord, passées ensuite (si activées), puis "Sans date"
+  const groupedCommandesByEclosion = useMemo(() => {
+    const groups: Record<string, CommandePoussin[]> = {};
+    filteredCommandes.forEach((cmd) => {
+      // Utiliser dateEclosion ou eclosion (compatibilité des deux champs)
+      const dateKey = (cmd.dateEclosion || (cmd as any).eclosion || 'Sans date').trim();
+      if (!groups[dateKey]) groups[dateKey] = [];
+      groups[dateKey].push(cmd);
+    });
+
+    // Convertir en tableau et trier par date d'éclosion
+    const groupArray = Object.entries(groups).map(([dateEclosion, cmds]) => ({
+      dateEclosion,
+      commandes: cmds,
+    }));
+
+    const todayMs = new Date().setHours(0, 0, 0, 0);
+    groupArray.sort((a, b) => {
+      if (a.dateEclosion === 'Sans date') return 1;
+      if (b.dateEclosion === 'Sans date') return -1;
+      // Parser dd/MM/yyyy
+      const parseDMY = (s: string): number => {
+        const parts = s.split('/');
+        if (parts.length !== 3) return 0;
+        return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0])).getTime();
+      };
+      const da = parseDMY(a.dateEclosion);
+      const db = parseDMY(b.dateEclosion);
+      const isPastA = da < todayMs;
+      const isPastB = db < todayMs;
+      // À venir en premier
+      if (!isPastA && isPastB) return -1;
+      if (isPastA && !isPastB) return 1;
+      // Si toutes deux passées : plus récentes d'abord
+      if (isPastA && isPastB) return db - da;
+      // Si toutes deux futures : plus proches d'abord
+      return da - db;
+    });
+
+    return groupArray;
+  }, [filteredCommandes]);
 
   // Save new client inline
   const handleSaveNewClient = () => {
@@ -1310,44 +1395,167 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             </div>
           </div>
 
-          {/* Orders List (Screenshot 5) */}
-          <div className="p-6 pt-2 space-y-3 max-h-[60vh] overflow-y-auto">
-            {filteredCommandes.map((cmd) => {
-              const isConfirmed = cmd.statut === 'Confirmée';
+          {/* Option pour inclure ou masquer les commandes passées */}
+          <div className="px-6 py-2 bg-slate-50 border-y border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <label className="flex items-center gap-2 cursor-pointer select-none font-medium text-slate-700 hover:text-slate-900 transition">
+              <input
+                type="checkbox"
+                checked={showPastOrders}
+                onChange={(e) => setShowPastOrders(e.target.checked)}
+                className="w-4 h-4 rounded text-[#5b7c99] focus:ring-[#5b7c99] border-slate-300"
+              />
+              <span>Afficher les commandes passées</span>
+              {totalCommandesPassees > 0 && (
+                <span className="text-[11px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">
+                  {totalCommandesPassees}
+                </span>
+              )}
+            </label>
+
+            {!showPastOrders && totalCommandesPassees > 0 && (
+              <span className="text-[11px] text-slate-500 font-medium flex items-center gap-1.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span>Commandes passées masquées par défaut</span>
+              </span>
+            )}
+          </div>
+
+          {/* Orders List grouped by eclosion date */}
+          <div className="p-6 pt-2 space-y-4 max-h-[60vh] overflow-y-auto">
+            {/* Suggestion si résultat trouvé dans l'historique masqué */}
+            {!showPastOrders && pastMatchesCount > 0 && filteredCommandes.length === 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">💡</span>
+                  <div>
+                    <div className="font-bold">Aucune commande à venir trouvée</div>
+                    <div className="text-amber-800 mt-0.5">
+                      Cependant, <span className="font-bold">{pastMatchesCount} commande(s) passée(s)</span> correspondent à votre recherche.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPastOrders(true)}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs transition shadow-xs shrink-0"
+                >
+                  Voir l'historique
+                </button>
+              </div>
+            )}
+
+            {groupedCommandesByEclosion.map((group) => {
+              // Calculer le total de poussins pour cette date d'éclosion
+              const totalPoussinsDate = group.commandes.reduce((sum, c) => sum + (c.quantite || 0), 0);
+              const isSansDate = group.dateEclosion === 'Sans date';
+              const isGroupPast = !isSansDate && (() => {
+                const d = parseFrDate(group.dateEclosion);
+                if (!d) return false;
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                return d.getTime() < today.getTime();
+              })();
 
               return (
-                <div
-                  key={cmd.id}
-                  onClick={() => handleOpenEdit(cmd)}
-                  className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs hover:shadow-md transition cursor-pointer hover:border-[#5b7c99] space-y-1.5"
-                  style={{ borderLeft: '4px solid #5b7c99' }}
-                >
-                  <div className="text-xs font-bold text-[#5b7c99] uppercase tracking-wide">
-                    {cmd.id}
+                <div key={group.dateEclosion} className="space-y-2">
+                  {/* ✅ En-tête de groupe : Date d'éclosion */}
+                  <div
+                    className={`sticky top-0 z-10 px-4 py-2.5 rounded-xl shadow-sm flex items-center justify-between gap-2 ${
+                      isSansDate
+                        ? 'bg-slate-100 text-slate-700 border border-slate-200'
+                        : isGroupPast
+                        ? 'bg-slate-100 text-slate-600 border border-slate-300 opacity-90'
+                        : 'bg-gradient-to-r from-amber-50 to-orange-50 text-amber-900 border border-amber-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">{isSansDate ? '📅' : isGroupPast ? '⏳' : '🥚'}</span>
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider font-bold opacity-70">
+                          {isSansDate ? "Date d'éclosion non renseignée" : isGroupPast ? "Date d'éclosion passée" : "Date d'éclosion"}
+                        </div>
+                        <div className="text-sm font-black flex items-center gap-2">
+                          <span>{group.dateEclosion}</span>
+                          {isGroupPast && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                              Passée
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] font-bold">
+                      <span className="bg-white/70 px-2 py-0.5 rounded-md">
+                        {group.commandes.length} commande{group.commandes.length > 1 ? 's' : ''}
+                      </span>
+                      <span className="bg-white/70 px-2 py-0.5 rounded-md">
+                        🐣 {totalPoussinsDate.toLocaleString('fr-FR')} poussins
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-base font-bold text-slate-900">
-                    {cmd.prenom} {cmd.nom}
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
-                    <span className="flex items-center gap-1">
-                      <span>📦</span>
-                      <strong className="text-slate-800">{cmd.quantite} poussin(s)</strong>
-                    </span>
-                    <span
-                      className={`font-semibold ${
-                        isConfirmed ? 'text-emerald-600' : 'text-amber-600'
-                      }`}
-                    >
-                      {cmd.statut}
-                    </span>
+
+                  {/* Cartes des commandes du groupe */}
+                  <div className="space-y-2 pl-2 border-l-2 border-amber-100">
+                    {group.commandes.map((cmd) => {
+                      const isConfirmed = cmd.statut === 'Confirmée';
+                      return (
+                        <div
+                          key={cmd.id}
+                          onClick={() => handleOpenEdit(cmd)}
+                          className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs hover:shadow-md transition cursor-pointer hover:border-[#5b7c99] space-y-1.5"
+                          style={{ borderLeft: '4px solid #5b7c99' }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs font-bold text-[#5b7c99] uppercase tracking-wide">
+                              {cmd.id}
+                            </div>
+                            <span
+                              className={`font-semibold text-[11px] ${
+                                isConfirmed ? 'text-emerald-600' : 'text-amber-600'
+                              }`}
+                            >
+                              {cmd.statut}
+                            </span>
+                          </div>
+                          <div className="text-base font-bold text-slate-900">
+                            {cmd.prenom} {cmd.nom}
+                          </div>
+                          <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
+                            <span className="flex items-center gap-1">
+                              <span>📦</span>
+                              <strong className="text-slate-800">{cmd.quantite} poussin(s)</strong>
+                            </span>
+                            <span className="flex items-center gap-1 text-amber-700 font-semibold">
+                              <span>🥚</span>
+                              {cmd.dateEclosion || cmd.eclosion || '—'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
             })}
 
             {filteredCommandes.length === 0 && (
-              <div className="text-center py-10 text-slate-400 text-sm">
-                Aucune commande trouvée.
+              <div className="text-center py-10 space-y-3">
+                <div className="text-4xl opacity-50">🔍</div>
+                <div className="text-sm font-bold text-slate-700">
+                  {searchTerm ? `Aucune commande trouvée pour « ${searchTerm} »` : 'Aucune commande à venir.'}
+                </div>
+                {!showPastOrders && totalCommandesPassees > 0 && (
+                  <div className="text-xs text-slate-500">
+                    Il y a {totalCommandesPassees} commande(s) passée(s) masquée(s).{' '}
+                    <button
+                      type="button"
+                      onClick={() => setShowPastOrders(true)}
+                      className="text-amber-600 hover:text-amber-700 font-bold underline cursor-pointer"
+                    >
+                      Afficher les commandes passées
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

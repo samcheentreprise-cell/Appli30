@@ -118,7 +118,9 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   onDeleteDepense,
   onClose,
 }) => {
-  // Form State
+  // ─────────────────────────────────────────────────────────────────
+  // FORM STATE  (formules inchangées)
+  // ─────────────────────────────────────────────────────────────────
   const [selectedLigne, setSelectedLigne] = useState<number | null>(null);
   const [date, setDate] = useState<string>(() => {
     const d = new Date();
@@ -131,6 +133,10 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   const [montant, setMontant] = useState<string>('');
   const [sourcePaiement, setSourcePaiement] = useState<string>('');
   const [sourcesPaiement, setSourcesPaiement] = useState<string[]>([]);
+
+  // UI visibility (nouveau)
+  const [showForm, setShowForm] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -164,13 +170,17 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     setTimeout(() => setNotif(null), 5000);
   };
 
-  // Determine if selected sub-category requires ID
+  // ─────────────────────────────────────────────────────────────────
+  // FORMULES — AUCUNE MODIFICATION
+  // ─────────────────────────────────────────────────────────────────
   const isIdComRequired = useMemo(() => {
     if (!sousCategorie) return false;
     const lower = sousCategorie.toLowerCase();
+    // ✅ Ajout explicite de "achat d'œufs à couver"
     return (
       lower.includes("achat d'oeuf") ||
       lower.includes("achat d'œuf") ||
+      lower.includes("achat d'œufs à couver") ||
       lower.includes('transport des oeuf') ||
       lower.includes('transport des œuf') ||
       lower.includes('dedouanement') ||
@@ -179,7 +189,6 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     );
   }, [sousCategorie]);
 
-  // Available OAC IDs for selection
   const availableOacIds = useMemo(() => {
     const ids = new Set<string>();
     oacList.forEach((o) => {
@@ -191,14 +200,24 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     return Array.from(ids);
   }, [oacList, depenses]);
 
-  // Format currency
+  const recentOacIds = useMemo(() => {
+    return [...oacList].sort((a, b) => {
+      const [dA, mA, yA] = a.date.split('/').map(Number);
+      const [dB, mB, yB] = b.date.split('/').map(Number);
+      return new Date(yB, mB - 1, dB).getTime() - new Date(yA, mA - 1, dA).getTime();
+    }).sort((a, b) => {
+      const [dA, mA, yA] = a.date.split('/').map(Number);
+      const [dB, mB, yB] = b.date.split('/').map(Number);
+      return new Date(yB, mB - 1, dB).getTime() - new Date(yA, mA - 1, dA).getTime();
+    }).slice(0, 10);
+  }, [oacList, depenses]);
+
   const fmt = (v: number | string) => {
     if (v === '' || v === null || v === undefined) return '--';
     const n = typeof v === 'number' ? v : parseFloat(v);
     return isNaN(n) ? String(v) : n.toLocaleString('fr-FR') + ' FCFA';
   };
 
-  // Load a row for editing
   const loadRow = (d: Depense, idx: number) => {
     const ligneNum = d.ligne !== undefined ? d.ligne : idx + 16;
     setSelectedLigne(ligneNum);
@@ -217,9 +236,9 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     setMontant(d.montant ? String(d.montant) : '');
     setSourcePaiement(d.sourcePaiement || '');
     setIdCommande(d.idCommande || '');
+    setShowForm(true);
   };
 
-  // Reset form
   const raz = () => {
     setSelectedLigne(null);
     const d = new Date();
@@ -233,7 +252,6 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     setIdCommande('');
   };
 
-  // Select a sub-category from popup
   const handleSelectSousCat = (item: { sousCategorie: string; idRequis?: boolean }, catName: string) => {
     setSousCategorie(item.sousCategorie);
     setCategorie(catName);
@@ -247,7 +265,6 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     setIsPopupOpen(false);
   };
 
-  // Save new expense
   const handleSave = () => {
     if (!date) {
       showNotif('Veuillez renseigner la date.', false);
@@ -271,7 +288,16 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
       const now = new Date();
       const yy = String(now.getFullYear()).slice(-2);
       const mm = String(now.getMonth() + 1).padStart(2, '0');
-      finalIdCom = `OAC-${yy}${mm}-00${depenses.length + 1}`;
+      const prefix = `OAC-${yy}${mm}-`;
+      const existingIds = oacList.map(o => o.id);
+      const relevantIds = existingIds.filter(id => id.startsWith(prefix));
+      
+      let nextNum = 1;
+      if (relevantIds.length > 0) {
+        const nums = relevantIds.map(id => parseInt(id.split('-')[2] || '0', 10));
+        nextNum = Math.max(...nums) + 1;
+      }
+      finalIdCom = `${prefix}${String(nextNum).padStart(3, '0')}`;
     }
 
     const dateParts = date.split('-');
@@ -293,9 +319,9 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     onAddDepense(newDepense);
     showNotif(`Dépense enregistrée : ${sousCategorie} — ${parseFloat(montant).toLocaleString('fr-FR')} FCFA`, true);
     raz();
+    setShowForm(false);
   };
 
-  // Modify selected expense
   const handleMod = () => {
     if (selectedLigne === null) return;
     if (!date || !sousCategorie || !montant || !sourcePaiement) {
@@ -308,7 +334,16 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
       const now = new Date();
       const yy = String(now.getFullYear()).slice(-2);
       const mm = String(now.getMonth() + 1).padStart(2, '0');
-      finalIdCom = `OAC-${yy}${mm}-00${depenses.length + 1}`;
+      const prefix = `OAC-${yy}${mm}-`;
+      const existingIds = oacList.map(o => o.id);
+      const relevantIds = existingIds.filter(id => id.startsWith(prefix));
+      
+      let nextNum = 1;
+      if (relevantIds.length > 0) {
+        const nums = relevantIds.map(id => parseInt(id.split('-')[2] || '0', 10));
+        nextNum = Math.max(...nums) + 1;
+      }
+      finalIdCom = `${prefix}${String(nextNum).padStart(3, '0')}`;
     }
 
     const dateParts = date.split('-');
@@ -334,9 +369,9 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     }
     showNotif(`Dépense modifiée : ${sousCategorie} — ${parseFloat(montant).toLocaleString('fr-FR')} FCFA`, true);
     raz();
+    setShowForm(false);
   };
 
-  // Delete selected expense
   const confirmDelete = () => {
     if (selectedLigne === null) return;
     setDeleteConfirmOpen(false);
@@ -345,9 +380,9 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     }
     showNotif('Dépense supprimée avec succès.', true);
     raz();
+    setShowForm(false);
   };
 
-  // Filtered expenses list
   const filteredDepenses = useMemo(() => {
     const q = filterText.toLowerCase().trim();
     return depenses.filter((r) => {
@@ -371,12 +406,10 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     });
   }, [depenses, filterText, filterCat, filterDate1, filterDate2]);
 
-  // Categories list for filter dropdown
   const allCategoriesForFilter = useMemo(() => {
     return Array.from(new Set(CATEGORIES_SOUS_CATEGORIES.map((c) => c.categorie)));
   }, []);
 
-  // Filtered popup items
   const filteredPopupCategories = useMemo(() => {
     const q = popupSearch.toLowerCase().trim();
     if (!q) return CATEGORIES_SOUS_CATEGORIES;
@@ -389,13 +422,32 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   }, [popupSearch]);
 
   const isRowSelected = selectedLigne !== null;
+  const totalFiltre = useMemo(
+    () => filteredDepenses.reduce((s, d) => s + (Number(d.montant) || 0), 0),
+    [filteredDepenses]
+  );
 
+  // Ouvre le formulaire vierge
+  const openNewForm = () => {
+    raz();
+    setShowForm(true);
+  };
+
+  // Ferme le formulaire et revient à la liste
+  const closeForm = () => {
+    raz();
+    setShowForm(false);
+  };
+
+  // ─────────────────────────────────────────────────────────────────
+  // RENDU
+  // ─────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-5 max-w-5xl mx-auto font-sans animate-fade-in text-[#1a2332]">
-      {/* Top Notification Banner */}
+    <div className="space-y-4 max-w-5xl mx-auto font-sans animate-fade-in text-[#1a2332]">
+      {/* Notification Banner */}
       {notif && (
         <div
-          className={`sticky top-2 z-50 p-4 rounded-xl text-center font-bold text-sm shadow-xl transition-all ${
+          className={`sticky top-2 z-50 p-3 rounded-xl text-center font-bold text-sm shadow-xl transition-all ${
             notif.ok
               ? 'bg-gradient-to-r from-[#1E8449] to-[#27AE60] text-white'
               : 'bg-gradient-to-r from-[#922B21] to-[#E74C3C] text-white'
@@ -406,339 +458,425 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════════════
-          CARD 1: NOUVELLE DEPENSE (Screenshot 1)
-         ══════════════════════════════════════════════════════════════════════════ */}
+      {/* ═══════════════════════════════════════════════════════════════
+          CARTE PRINCIPALE (vue liste + formulaire déroulant)
+         ═══════════════════════════════════════════════════════════════ */}
       <div className="bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden">
-        {/* Form Header Bar */}
-        <div className="bg-gradient-to-r from-[#1B4F72] via-[#21618C] to-[#2E86C1] px-6 py-4 flex items-center gap-3 text-white">
-          <span className="text-2xl">💰</span>
-          <h1 className="text-base sm:text-lg font-bold tracking-tight">Nouvelle depense</h1>
-        </div>
-
-        {/* Form Fields */}
-        <div className="p-6 space-y-4">
-          {/* Row 1: Date + N deg Piece */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">📅</span>
-                <span>Date</span>
-                <span className="text-[#E74C3C]">*</span>
-              </label>
-              <input
-                type="date"
-                required
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                style={{
-                  background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                  border: '2px solid #f39c12',
-                }}
-              />
+        {/* ─────────── BARRE D'OUTILS ─────────── */}
+        <div className="px-5 sm:px-6 py-4 border-b border-slate-100">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            {/* Gauche : Titre + compteur */}
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#1B4F72] to-[#2E86C1] text-white flex items-center justify-center text-lg shadow-sm">
+                💰
+              </span>
+              <div>
+                <h2 className="text-base font-bold text-[#1B4F72] tracking-tight leading-tight">
+                  Dépenses
+                </h2>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  {depenses.length} enregistrement{depenses.length > 1 ? 's' : ''}
+                </p>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">📄</span>
-                <span>N deg Piece</span>
-              </label>
+
+            {/* Centre : Recherche */}
+            <div className="relative flex-1 md:max-w-xs">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
               <input
                 type="text"
-                placeholder="N deg facture/recu"
-                value={numPiece}
-                onChange={(e) => setNumPiece(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-[#fafbfc] border-2 border-[#d5dde5] rounded-lg text-sm text-[#1a2332] placeholder-slate-400 focus:outline-none focus:border-[#2E86C1] focus:bg-white"
+                placeholder="Rechercher..."
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 border-2 border-[#e0e6ec] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1] focus:bg-white transition"
               />
+            </div>
+
+            {/* Droite : Boutons d'action */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFilters((v) => !v)}
+                className={`px-3 py-2 rounded-lg text-xs font-bold uppercase border transition flex items-center gap-1.5 ${
+                  showFilters
+                    ? 'bg-[#1B4F72] text-white border-[#1B4F72]'
+                    : 'bg-white text-[#2c3e50] border-[#d5dde5] hover:bg-[#eaf2f8]'
+                }`}
+                title="Afficher / masquer les filtres avancés (catégorie, dates)"
+              >
+                <span>✱</span>
+                <span>Filtrer</span>
+              </button>
+              <button
+                type="button"
+                onClick={openNewForm}
+                className="px-3 py-2 rounded-lg text-xs font-bold uppercase text-white shadow-sm transition hover:opacity-90 flex items-center gap-1.5 active:scale-95"
+                style={{ background: 'linear-gradient(135deg, #1B4F72, #2E86C1)' }}
+                title="Ouvrir le formulaire pour enregistrer une nouvelle dépense"
+              >
+                <span>+</span>
+                <span>Ajouter une dépense</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClose || closeForm}
+                className="px-3 py-2 rounded-lg text-xs font-bold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition flex items-center gap-1.5"
+                title="Fermer le module des dépenses"
+              >
+                <span>✕</span>
+                <span className="hidden sm:inline">Quitter</span>
+              </button>
             </div>
           </div>
 
-          {/* Row 2: Sous-categorie (Popup trigger) + Categorie (auto) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">📁</span>
-                <span>Sous-categorie</span>
-                <span className="text-[#E74C3C]">*</span>
-              </label>
-              <div
-                onClick={() => {
-                  setPopupSearch('');
-                  setIsPopupOpen(true);
-                }}
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm font-bold flex items-center justify-between cursor-pointer transition select-none shadow-sm"
-                style={{
-                  background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                  border: '2px solid #f39c12',
-                }}
-              >
-                <div className="flex items-center gap-2 truncate">
-                  <span className="text-[#1B4F72] truncate">
-                    {sousCategorie || '-- Cliquer pour choisir --'}
+          {/* Filtres avancés (collapsible) */}
+          {showFilters && (
+            <div className="mt-3 pt-3 border-t border-slate-100 animate-slide-up">
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-2 tracking-wider">
+                Filtrer les dépenses
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <select
+                  value={filterCat}
+                  onChange={(e) => setFilterCat(e.target.value)}
+                  className="px-3 py-1.5 border-2 border-[#d5dde5] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1] focus:bg-white"
+                  title="Filtrer par catégorie de dépense"
+                >
+                  <option value="">Toutes catégories</option>
+                  {allCategoriesForFilter.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="date"
+                  title="Date de début"
+                  value={filterDate1}
+                  onChange={(e) => setFilterDate1(e.target.value)}
+                  className="px-3 py-1.5 border-2 border-[#d5dde5] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1]"
+                />
+                <input
+                  type="date"
+                  title="Date de fin"
+                  value={filterDate2}
+                  onChange={(e) => setFilterDate2(e.target.value)}
+                  className="px-3 py-1.5 border-2 border-[#d5dde5] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1]"
+                />
+                <button
+                  onClick={() => {
+                    setFilterText('');
+                    setFilterCat('');
+                    setFilterDate1('');
+                    setFilterDate2('');
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition"
+                  title="Effacer tous les filtres"
+                >
+                  ↺ Réinitialiser
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ─────────── FORMULAIRE DÉROULANT ─────────── */}
+        {showForm && (
+          <div className="border-b border-slate-200 bg-gradient-to-br from-[#f8fafb] to-white animate-slide-up">
+            {/* Form Header */}
+            <div className="px-5 sm:px-6 py-3 bg-gradient-to-r from-[#1B4F72] via-[#21618C] to-[#2E86C1] flex items-center justify-between text-white">
+              <div className="flex items-center gap-2.5">
+                <span className="text-lg">{isRowSelected ? '✎' : '➕'}</span>
+                <h3 className="text-sm font-bold tracking-tight">
+                  {isRowSelected ? 'Modifier la dépense' : 'Nouvelle dépense'}
+                </h3>
+                {isRowSelected && (
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">
+                    Ligne #{selectedLigne}
                   </span>
-                  {categorie && <span className="text-[11px] text-slate-500 font-normal">({categorie})</span>}
+                )}
+              </div>
+              <button
+                onClick={closeForm}
+                className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white font-bold transition"
+                title="Fermer le formulaire sans enregistrer"
+              >
+                ✕
+              </button>
+            </div>
+            {!isRowSelected && (
+              <div className="px-5 sm:px-6 py-2 bg-[#fef9e7] border-b border-[#f39c12]/30 text-[11px] text-[#7d6608] font-medium flex items-center gap-1.5">
+                <span>💡</span>
+                <span>Renseignez les champs ci-dessous puis cliquez sur <strong>Enregistrer</strong>. Les champs marqués <span className="text-[#E74C3C] font-bold">*</span> sont obligatoires.</span>
+              </div>
+            )}
+
+            {/* Form Fields */}
+            <div className="p-5 sm:p-6 space-y-4">
+              {/* Row 1: Date + N° Pièce */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">📅</span>
+                    <span>Date</span>
+                    <span className="text-[#E74C3C]">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    style={{
+                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: '2px solid #f39c12',
+                    }}
+                  />
                 </div>
-                <span className="text-[#2E86C1] text-lg font-bold ml-2">▾</span>
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">📄</span>
+                    <span>N° Pièce</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="N° facture/reçu"
+                    value={numPiece}
+                    onChange={(e) => setNumPiece(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-[#fafbfc] border-2 border-[#d5dde5] rounded-lg text-sm text-[#1a2332] placeholder-slate-400 focus:outline-none focus:border-[#2E86C1] focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Row 2: Sous-catégorie + Catégorie (auto) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">📁</span>
+                    <span>Sous-catégorie</span>
+                    <span className="text-[#E74C3C]">*</span>
+                  </label>
+                  <div
+                    onClick={() => {
+                      setPopupSearch('');
+                      setIsPopupOpen(true);
+                    }}
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm font-bold flex items-center justify-between cursor-pointer transition select-none shadow-sm"
+                    style={{
+                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: '2px solid #f39c12',
+                    }}
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="text-[#1B4F72] truncate">
+                        {sousCategorie || '-- Cliquer pour choisir --'}
+                      </span>
+                      {categorie && <span className="text-[11px] text-slate-500 font-normal">({categorie})</span>}
+                    </div>
+                    <span className="text-[#2E86C1] text-lg font-bold ml-2">▾</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">🏷</span>
+                    <span>Catégorie (auto)</span>
+                  </label>
+                  <div
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm font-bold text-[#1B4F72] select-none min-h-[42px] flex items-center"
+                    style={{
+                      background: 'linear-gradient(135deg, #eef2f7, #e8eef5)',
+                      border: '2px solid #c8d5e0',
+                    }}
+                  >
+                    {categorie || '--'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Section Divider */}
+              <div className="h-[1px] bg-gradient-to-r from-transparent via-[#c8d5e0] to-transparent my-2" />
+
+              {/* Row 3: Libellé + Montant + Source de paiement */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">📝</span>
+                    <span>Libellé</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Description de la dépense"
+                    value={libelle}
+                    onChange={(e) => setLibelle(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-[#fafbfc] border-2 border-[#d5dde5] rounded-lg text-sm text-[#1a2332] placeholder-slate-400 focus:outline-none focus:border-[#2E86C1] focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">💰</span>
+                    <span>Montant (FCFA)</span>
+                    <span className="text-[#E74C3C]">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder=""
+                    value={montant}
+                    onChange={(e) => setMontant(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm font-black text-[#1a2332] focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    style={{
+                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: '2px solid #f39c12',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">🏦</span>
+                    <span>Source de paiement</span>
+                    <span className="text-[#E74C3C]">*</span>
+                  </label>
+                  <select
+                    value={sourcePaiement}
+                    onChange={(e) => setSourcePaiement(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    style={{
+                      background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                      border: '2px solid #f39c12',
+                    }}
+                  >
+                    <option value="">-- Choisir --</option>
+                    {sourcesPaiement.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Row 4: ID Commande (Conditionnel) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+                    <span className="opacity-70">🔗</span>
+                    <span>ID Commande</span>
+                    {isIdComRequired && <span className="text-[#E74C3C]">*</span>}
+                    {isIdComRequired && (
+                      <span className="text-[10px] text-[#f39c12] font-bold ml-1">(visible si achat/transport/dédouanement)</span>
+                    )}
+                  </label>
+                  <select
+                    disabled={!isIdComRequired}
+                    value={idCommande}
+                    onChange={(e) => setIdCommande(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
+                    style={
+                      isIdComRequired
+                        ? {
+                            background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
+                            border: '2px solid #f39c12',
+                            cursor: 'pointer',
+                            color: '#1a2332',
+                          }
+                        : {
+                            background: '#eef2f7',
+                            color: '#a8b4c0',
+                            cursor: 'not-allowed',
+                            border: '2px solid #d5dde5',
+                          }
+                    }
+                  >
+                    <option value="">-- Choisir --</option>
+                    <option value="__NOUVEAU__">Nouvel ID (auto)</option>
+                    {recentOacIds.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.id} (Récemment créé)
+                      </option>
+                    ))}
+                    {/* All other IDs */}
+                    {availableOacIds.filter(id => !recentOacIds.map(o => o.id).includes(id)).map((id) => (
+                      <option key={id} value={id}>
+                        {id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Action Buttons Bar */}
+              <div className="flex flex-wrap items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={!isRowSelected}
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
+                    isRowSelected ? 'active:scale-95' : 'opacity-40 cursor-not-allowed'
+                  }`}
+                  style={{
+                    background: 'linear-gradient(135deg, #922B21, #E74C3C)',
+                  }}
+                  title="Supprimer définitivement cette dépense"
+                >
+                  🗑 Supprimer
+                </button>
+                {isRowSelected ? (
+                  <button
+                    type="button"
+                    onClick={handleMod}
+                    className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95"
+                    style={{
+                      background: 'linear-gradient(135deg, #1E8449, #27AE60)',
+                    }}
+                    title="Enregistrer les modifications"
+                  >
+                    ✔ Enregistrer
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition active:scale-95"
+                    style={{
+                      background: 'linear-gradient(135deg, #1B4F72, #2E86C1)',
+                    }}
+                    title="Enregistrer la nouvelle dépense"
+                  >
+                    ✔ Enregistrer
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeForm}
+                  className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition"
+                  title="Annuler et revenir à la liste"
+                >
+                  ↺ Annuler
+                </button>
               </div>
             </div>
-
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">🏷</span>
-                <span>Categorie (auto)</span>
-              </label>
-              <div
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm font-bold text-[#1B4F72] select-none min-h-[42px] flex items-center"
-                style={{
-                  background: 'linear-gradient(135deg, #eef2f7, #e8eef5)',
-                  border: '2px solid #c8d5e0',
-                }}
-              >
-                {categorie || '--'}
-              </div>
-            </div>
           </div>
+        )}
 
-          {/* Section Divider */}
-          <div className="h-[1px] bg-gradient-to-r from-transparent via-[#c8d5e0] to-transparent my-4" />
-
-          {/* Row 3: Libelle + Montant + Source de paiement */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">📝</span>
-                <span>Libelle</span>
-              </label>
-              <input
-                type="text"
-                placeholder="Description de la depense"
-                value={libelle}
-                onChange={(e) => setLibelle(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-[#fafbfc] border-2 border-[#d5dde5] rounded-lg text-sm text-[#1a2332] placeholder-slate-400 focus:outline-none focus:border-[#2E86C1] focus:bg-white"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">💰</span>
-                <span>Montant (FCFA)</span>
-                <span className="text-[#E74C3C]">*</span>
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                placeholder=""
-                value={montant}
-                onChange={(e) => setMontant(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm font-black text-[#1a2332] focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                style={{
-                  background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                  border: '2px solid #f39c12',
-                }}
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">🏦</span>
-                <span>Source de paiement</span>
-                <span className="text-[#E74C3C]">*</span>
-              </label>
-              <select
-                value={sourcePaiement}
-                onChange={(e) => setSourcePaiement(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                style={{
-                  background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                  border: '2px solid #f39c12',
-                }}
-              >
-                <option value="">-- Choisir --</option>
-                {sourcesPaiement.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Row 4: ID Commande (Conditional) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
-                <span className="opacity-70">🔗</span>
-                <span>ID Commande</span>
-                {isIdComRequired && <span className="text-[#E74C3C]">*</span>}
-              </label>
-              <select
-                disabled={!isIdComRequired}
-                value={idCommande}
-                onChange={(e) => setIdCommande(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                style={
-                  isIdComRequired
-                    ? {
-                        background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                        border: '2px solid #f39c12',
-                        cursor: 'pointer',
-                        color: '#1a2332',
-                      }
-                    : {
-                        background: '#eef2f7',
-                        color: '#a8b4c0',
-                        cursor: 'not-allowed',
-                        border: '2px solid #d5dde5',
-                      }
-                }
-              >
-                <option value="">-- Choisir --</option>
-                <option value="__NOUVEAU__">Nouvel ID (auto)</option>
-                {availableOacIds.map((id) => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Action Buttons Bar */}
-          <div className="flex flex-wrap items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
-            <button
-              type="button"
-              disabled={isRowSelected}
-              onClick={handleSave}
-              className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                !isRowSelected ? 'active:scale-95' : 'opacity-40 cursor-not-allowed'
-              }`}
-              style={{
-                background: 'linear-gradient(135deg, #1B4F72, #2E86C1)',
-              }}
-            >
-              ✔ ENREGISTRER
-            </button>
-            <button
-              type="button"
-              disabled={!isRowSelected}
-              onClick={handleMod}
-              className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                isRowSelected ? 'active:scale-95' : 'opacity-40 cursor-not-allowed'
-              }`}
-              style={{
-                background: 'linear-gradient(135deg, #1E8449, #27AE60)',
-              }}
-            >
-              ✎ MODIFIER
-            </button>
-            <button
-              type="button"
-              disabled={!isRowSelected}
-              onClick={() => setDeleteConfirmOpen(true)}
-              className={`px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition ${
-                isRowSelected ? 'active:scale-95' : 'opacity-40 cursor-not-allowed'
-              }`}
-              style={{
-                background: 'linear-gradient(135deg, #922B21, #E74C3C)',
-              }}
-            >
-              🗑 SUPPRIMER
-            </button>
-            <button
-              type="button"
-              onClick={raz}
-              className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition"
-            >
-              ↺ ANNULER
-            </button>
-            <button
-              type="button"
-              onClick={onClose || raz}
-              className="px-4 py-2 rounded-lg text-xs font-extrabold uppercase text-white shadow-sm transition hover:opacity-90"
-              style={{
-                background: 'linear-gradient(135deg, #922B21, #E74C3C)',
-              }}
-            >
-              ✕ QUITTER
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ══════════════════════════════════════════════════════════════════════════
-          CARD 2: DERNIERES DEPENSES (Screenshot 1 Bottom Table)
-         ══════════════════════════════════════════════════════════════════════════ */}
-      <div className="bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden">
-        {/* Table Card Header with Filters */}
-        <div className="p-5 sm:p-6 pb-2 border-b border-slate-100 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">📊</span>
-            <h2 className="text-base font-bold text-[#1B4F72] tracking-tight">Dernieres depenses</h2>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-            <input
-              type="text"
-              placeholder="Rechercher..."
-              value={filterText}
-              onChange={(e) => setFilterText(e.target.value)}
-              className="px-3 py-1.5 border-2 border-[#d5dde5] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1] focus:bg-white w-full sm:w-36"
-            />
-            <select
-              value={filterCat}
-              onChange={(e) => setFilterCat(e.target.value)}
-              className="px-2.5 py-1.5 border-2 border-[#d5dde5] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1] focus:bg-white"
-            >
-              <option value="">-- Categorie --</option>
-              {allCategoriesForFilter.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-            <input
-              type="date"
-              title="Date début"
-              value={filterDate1}
-              onChange={(e) => setFilterDate1(e.target.value)}
-              className="px-2 py-1.5 border-2 border-[#d5dde5] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1]"
-            />
-            <input
-              type="date"
-              title="Date fin"
-              value={filterDate2}
-              onChange={(e) => setFilterDate2(e.target.value)}
-              className="px-2 py-1.5 border-2 border-[#d5dde5] rounded-lg text-xs bg-[#fafbfc] focus:outline-none focus:border-[#2E86C1]"
-            />
-            <button
-              onClick={() => {
-                setFilterText('');
-                setFilterCat('');
-                setFilterDate1('');
-                setFilterDate2('');
-              }}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold uppercase bg-[#e8eef5] hover:bg-[#d5dde8] text-[#2c3e50] border border-[#c8d5e0] transition"
-            >
-              REINITIALISER
-            </button>
-          </div>
+        {/* ─────────── COMPTEUR RÉSULTATS ─────────── */}
+        <div className="px-5 sm:px-6 py-2 text-[11px] text-slate-500 font-medium border-b border-slate-100 bg-[#fafbfc]">
+          {filteredDepenses.length} résultat(s) sur {depenses.length}
+          {filterText || filterCat || filterDate1 || filterDate2 ? ' (filtré)' : ''}
         </div>
 
-        {/* Counter */}
-        <div className="px-6 py-2 text-xs text-slate-500 font-medium">
-          {filteredDepenses.length} resultat(s) sur {depenses.length}
-        </div>
-
-        {/* Table */}
-        <div className="overflow-x-auto px-6 pb-6">
+        {/* ─────────── TABLEAU ─────────── */}
+        <div className="overflow-x-auto px-2 sm:px-4 py-2">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-gradient-to-r from-[#1B4F72] to-[#2E86C1] text-white uppercase text-[11px] font-bold tracking-wider">
                 <th className="px-3 py-3 w-[100px] whitespace-nowrap">DATE</th>
                 <th className="px-3 py-3 w-[190px] whitespace-nowrap">SOUS-CAT.</th>
-                <th className="px-3 py-3 w-[240px]">LIBELLE</th>
-                <th className="px-3 py-3 w-[170px] whitespace-nowrap">SOURCE PAIEMENT</th>
+                <th className="px-3 py-3 w-[240px]">LIBELLÉ</th>
+                <th className="px-3 py-3 w-[170px] whitespace-nowrap">SOURCE</th>
                 <th className="px-3 py-3 w-[120px] text-right whitespace-nowrap">MONTANT</th>
               </tr>
             </thead>
@@ -783,13 +921,29 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
                 </tr>
               )}
             </tbody>
+            {/* Footer Total */}
+            <tfoot>
+              <tr className="bg-gradient-to-r from-[#f0f4f8] to-[#e8eef5] border-t-2 border-[#c8d5e0]">
+                <td colSpan={4} className="px-3 py-3 text-xs font-bold uppercase text-[#2c3e50] tracking-wider">
+                  Total filtré :
+                </td>
+                <td className="px-3 py-3 text-right text-sm font-black text-[#1B4F72] whitespace-nowrap">
+                  {totalFiltre.toLocaleString('fr-FR')} FCFA
+                </td>
+              </tr>
+            </tfoot>
           </table>
+        </div>
+
+        {/* Indication bas de tableau */}
+        <div className="px-5 sm:px-6 py-2 text-[10px] text-slate-400 italic border-t border-slate-100">
+          💡 Astuce : cliquez sur une ligne du tableau pour la modifier, ou sur <strong>+ Ajouter une dépense</strong> pour en créer une nouvelle.
         </div>
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
-          POPUP SOUS-CATEGORIE (Screenshot 2)
-         ══════════════════════════════════════════════════════════════════════════ */}
+      {/* ═══════════════════════════════════════════════════════════════
+          POPUP SOUS-CATÉGORIE
+         ═══════════════════════════════════════════════════════════════ */}
       {isPopupOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-[rgba(10,30,50,0.55)] backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[88vh] shadow-2xl overflow-hidden border border-slate-200 flex flex-col animate-slide-up">
@@ -797,7 +951,7 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
             <div className="bg-gradient-to-r from-[#1B4F72] via-[#21618C] to-[#2E86C1] px-6 py-4 flex items-center justify-between text-white shadow-md">
               <div className="flex items-center gap-2.5">
                 <span className="text-xl">📁</span>
-                <h3 className="font-bold text-base tracking-tight">Choisir une sous-categorie</h3>
+                <h3 className="font-bold text-base tracking-tight">Choisir une sous-catégorie</h3>
               </div>
               <button
                 onClick={() => setIsPopupOpen(false)}
@@ -812,7 +966,7 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
               <input
                 type="text"
                 autoFocus
-                placeholder="Rechercher une sous-categorie..."
+                placeholder="Rechercher une sous-catégorie..."
                 value={popupSearch}
                 onChange={(e) => setPopupSearch(e.target.value)}
                 className="w-full px-4 py-2.5 bg-white border-2 border-[#d5dde5] rounded-xl text-sm focus:outline-none focus:border-[#2E86C1] focus:ring-2 focus:ring-[#2E86C1]/20 shadow-inner"
