@@ -47,27 +47,27 @@ import { setCurrentUser as setStoredUser, oacErrorMessage } from './lib/oacRules
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
-  const [currentRole, setCurrentRole] = useState<UserRole>('admin');
-  const [currentUser, setCurrentUser] = useState<{username: string, role: UserRole} | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
-  // ✅ ANOMALIE CORRIGÉE — Plus de cache local pour les notifications.
-  // adminNotifications est maintenant DÉRIVÉ des soumissions (voir useMemo plus bas).
-  // Tout vient de Google Sheets via handleTriggerSync().
-
-  // Update tab when role changes
-  useEffect(() => {
+  const [currentUser, setCurrentUser] = useState<{username: string, role: UserRole} | null>(() => {
     const stored = localStorage.getItem('samche_user');
     if (stored) {
-      try {
-        const user = JSON.parse(stored);
-        setCurrentUser(user);
-        setIsLoggedIn(true);
-        setStoredUser({ username: user.username, role: user.role as any });
-      } catch (e) {
-        console.error('Failed to parse stored user on init', e);
-      }
+      try { return JSON.parse(stored); } catch (e) { console.error('Failed to parse stored user', e); }
     }
-  }, []);
+    return null;
+  });
+  const [currentRole, setCurrentRole] = useState<UserRole>(() => {
+    const stored = localStorage.getItem('samche_user');
+    if (stored) {
+      try { return JSON.parse(stored).role || 'utilisateur'; } catch (e) {}
+    }
+    return 'utilisateur';
+  });
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => !!localStorage.getItem('samche_user'));
+
+  useEffect(() => {
+    if (currentUser) {
+      setStoredUser({ username: currentUser.username, role: currentUser.role as any });
+    }
+  }, [currentUser]);
 
   // Update tab when role changes
   useEffect(() => {
@@ -1252,7 +1252,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'dashboard' && currentRole !== 'utilisateur' && (
+            {activeTab === 'dashboard' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <Dashboard
                 oacList={oacList}
                 depenses={depenses}
@@ -1274,7 +1274,7 @@ export default function App() {
             )}
 
             {/* ✅ v1.3.14 — Nouvel onglet Coûts & Rentabilité */}
-            {activeTab === 'couts_rentabilite' && currentRole !== 'utilisateur' && (
+            {activeTab === 'couts_rentabilite' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <CoutRentabiliteModule
                 oacList={oacList}
                 depenses={depenses}
@@ -1283,7 +1283,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'commandes_poussins' && (
+            {activeTab === 'commandes_poussins' && currentRole === 'admin' && (
               <CommandesPoussinsModule
                 commandes={commandesPoussins}
                 clients={clients}
@@ -1311,7 +1311,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'ventes' && (
+            {activeTab === 'ventes' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <VentesModule
                 ventes={ventes}
                 clients={clients}
@@ -1324,7 +1324,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'factures' && (
+            {activeTab === 'factures' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <FacturesModule
                 factures={factures}
                 clients={clients}
@@ -1341,7 +1341,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'depenses' && (
+            {activeTab === 'depenses' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <DepensesModule
                 depenses={depenses}
                 oacList={oacList}
@@ -1352,7 +1352,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'caisse' && (
+            {activeTab === 'caisse' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <CaisseModule
                 mouvements={mouvementsCaisse}
                 onAddMouvement={handleAddMouvementCaisse}
@@ -1362,7 +1362,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'clients' && (
+            {activeTab === 'clients' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <ClientsModule
                 clients={clients}
                 onAddClient={handleAddClient}
@@ -1370,7 +1370,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'recherche' && (
+            {activeTab === 'recherche' && (currentRole === 'admin' || currentRole === 'comptable') && (
               <RechercheModule
                 depenses={depenses}
                 ventes={ventes}
@@ -1379,7 +1379,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'parametres' && (
+            {activeTab === 'parametres' && currentRole === 'admin' && (
               <ParametresModule
                 syncStatus={syncStatus}
                 onTriggerSync={() => setSyncModalOpen(true)}

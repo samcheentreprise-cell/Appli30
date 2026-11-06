@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { OAC, SoumissionEnAttente, UserRole } from '../types';
+import { OAC, SoumissionEnAttente, UserRole, Depense } from '../types';
 import { TYPES_OAC, RACES_OAC, FOURNISSEURS_OAC } from '../data/initialData';
 import { playAlertSound } from '../utils/audio';
 import { DiagnosticLogModal } from './DiagnosticLogModal';

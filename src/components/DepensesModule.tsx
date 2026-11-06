@@ -406,6 +406,29 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     });
   }, [depenses, filterText, filterCat, filterDate1, filterDate2]);
 
+  // Convertit une date "jj/mm/aaaa" en timestamp pour le tri
+  const dateToMs = (s: string): number => {
+    const [j, m, a] = (s || '').split('/').map(Number);
+    if (!j || !m || !a) return 0;
+    return new Date(a, m - 1, j).getTime();
+  };
+
+  // Tri : de la plus récente à la plus ancienne
+  const depensesTriees = useMemo(() => {
+    return [...filteredDepenses].sort((a, b) => {
+      const diff = dateToMs(b.date) - dateToMs(a.date);
+      if (diff !== 0) return diff;
+      return (b.ligne ?? 0) - (a.ligne ?? 0);
+    });
+  }, [filteredDepenses]);
+
+  // Liste affichée : limitée aux 10 dépenses les plus récentes
+  const LIMITE_LISTE = 10;
+  const depensesAffichees = useMemo(
+    () => depensesTriees.slice(0, LIMITE_LISTE),
+    [depensesTriees]
+  );
+
   const allCategoriesForFilter = useMemo(() => {
     return Array.from(new Set(CATEGORIES_SOUS_CATEGORIES.map((c) => c.categorie)));
   }, []);
@@ -864,7 +887,7 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
 
         {/* ─────────── COMPTEUR RÉSULTATS ─────────── */}
         <div className="px-5 sm:px-6 py-2 text-[11px] text-slate-500 font-medium border-b border-slate-100 bg-[#fafbfc]">
-          {filteredDepenses.length} résultat(s) sur {depenses.length}
+          {depensesAffichees.length} affichée(s) sur {filteredDepenses.length} résultat(s) sur {depenses.length}
           {filterText || filterCat || filterDate1 || filterDate2 ? ' (filtré)' : ''}
         </div>
 
@@ -881,7 +904,7 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredDepenses.map((d, idx) => {
+              {depensesAffichees.map((d, idx) => {
                 const currentLigne = d.ligne !== undefined ? d.ligne : idx + 16;
                 const isSelected = selectedLigne === currentLigne;
 
@@ -913,7 +936,7 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
                   </tr>
                 );
               })}
-              {filteredDepenses.length === 0 && (
+              {depensesAffichees.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
                     Aucune dépense trouvée avec ces critères.
