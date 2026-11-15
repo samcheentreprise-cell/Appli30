@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Facture, Client, Bordereau, FactureLigne, BordereauLigne, UserRole } from '../types';
-import { getFParamData } from '../services/googleSheet';
+import { getFParamData, callApi } from '../services/googleSheet';
+import { JustificatifsDepense, cleJustificatifFacture } from './JustificatifsDepense';
 
 interface FacturesModuleProps {
   factures: Facture[];
@@ -134,6 +135,29 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [clientFormVisible, setClientFormVisible] = useState(false);
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // JUSTIFICATIFS (photos / PDF liés aux factures)
+  // ══════════════════════════════════════════════════════════════════════════
+  // Nombre de justificatifs par facture (pour les badges dans la liste)
+  const [justifCounts, setJustifCounts] = useState<Record<string, number>>({});
+  // Facture dont on affiche les justificatifs dans le modal dédié
+  const [justifModalFacture, setJustifModalFacture] = useState<Facture | null>(null);
+
+  const chargerJustifCounts = async () => {
+    try {
+      const res = await callApi('factures.justificatifsCles', {}, 'GET');
+      // ✅ CORRECTION : la réponse est enveloppée dans { success, data: { success, counts } }
+      const inner = res?.data || res;
+      if (res?.success || inner?.success) setJustifCounts(inner?.counts || res?.counts || {});
+    } catch {
+      // Badge facultatif : on ignore l'erreur silencieusement
+    }
+  };
+
+  useEffect(() => {
+    chargerJustifCounts();
+  }, [factures]);
+
   const showMsg = (text: string, ok: boolean) => {
     setNotif({ text, ok });
     setTimeout(() => setNotif(null), 5000);
@@ -144,13 +168,14 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
 
   // Selected client info lookup
   const selectedClientObj = useMemo(() => {
-    return clients.find((c) => c.label.toLowerCase() === factClient.toLowerCase()) || null;
+    if (!clients || !factClient) return null;
+    return clients.find((c) => c && (c.label || '').toString().toLowerCase() === factClient.toLowerCase()) || null;
   }, [clients, factClient]);
 
   // Auto-fill address and phone when client is selected
   const handleClientChange = (val: string) => {
     setFactClient(val);
-    const found = clients.find((c) => c.label.toLowerCase() === val.toLowerCase());
+    const found = clients.find((c) => (c.label || '').toString().toLowerCase() === val.toString().toLowerCase());
     if (found) {
       setFactAdresse(found.ville || '');
     }
@@ -158,7 +183,7 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
 
   const handleBLClientChange = (val: string) => {
     setBlClient(val);
-    const found = clients.find((c) => c.label.toLowerCase() === val.toLowerCase());
+    const found = clients.find((c) => (c.label || '').toString().toLowerCase() === val.toString().toLowerCase());
     if (found) {
       setBlAdresse(found.ville || '');
     }
@@ -391,7 +416,7 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
       adresse: blAdresse,
       refCmd: blRefCmd,
       lignes: validLines.map((l) => ({ designation: l.designation, qte: l.qte, unite: l.unite })),
-      tel: clients.find((c) => c.label.toLowerCase() === blClient.toLowerCase())?.telephone || '',
+      tel: clients.find((c) => (c.label || '').toString().toLowerCase() === blClient.toString().toLowerCase())?.telephone || '',
     });
     setIsDocModalOpen(true);
     // Immediately clear all input form fields
@@ -1188,11 +1213,14 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                       <th className="py-2 px-3">CLIENT</th>
                       <th className="py-2 px-3 text-right">TOTAL</th>
                       <th className="py-2 px-3">STATUT</th>
+                      <th className="py-2 px-3 text-center">JUSTIF.</th>
                       <th className="py-2 px-3 text-center">ACTIONS</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredFactures.map((f, i) => (
+                    {filteredFactures.map((f, i) => {
+                      const nbJustif = justifCounts[cleJustificatifFacture(f)] || 0;
+                      return (
                       <tr key={i} className="hover:bg-slate-50">
                         <td className="py-2.5 px-3 font-bold text-[#1a3050]">{f.numero}</td>
                         <td className="py-2.5 px-3 text-slate-500">{f.date}</td>
@@ -1210,6 +1238,22 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                           >
                             {f.statut}
                           </span>
+                        </td>
+                        {/* Colonne JUSTIFICATIFS — badge cliquable */}
+                        <td className="py-2.5 px-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setJustifModalFacture(f)}
+                            title={nbJustif > 0 ? `${nbJustif} justificatif(s) — cliquer pour voir/ajouter` : 'Aucun justificatif — cliquer pour ajouter'}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                              nbJustif > 0
+                                ? 'bg-[#eaf2f8] text-[#1B4F72] hover:bg-[#d4e6f4] border border-[#2E86C1]/30'
+                                : 'bg-slate-100 text-slate-500 hover:bg-slate-200 border border-slate-200'
+                            }`}
+                          >
+                            <span>📎</span>
+                            <span>{nbJustif > 0 ? nbJustif : '+'}</span>
+                          </button>
                         </td>
                         <td className="py-2.5 px-3 text-center">
                           <div className="flex items-center justify-center gap-1.5">
@@ -1266,10 +1310,11 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {filteredFactures.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="py-6 text-center text-slate-400">
+                        <td colSpan={7} className="py-6 text-center text-slate-400">
                           Aucune facture trouvée.
                         </td>
                       </tr>
@@ -1454,10 +1499,10 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                         const q = clientSearchQuery.toLowerCase().trim();
                         if (!q) return true;
                         return (
-                          c.label.toLowerCase().includes(q) ||
-                          (c.ville && c.ville.toLowerCase().includes(q)) ||
-                          (c.email && c.email.toLowerCase().includes(q)) ||
-                          (c.telephone && c.telephone.includes(q))
+                          String(c.label || `${c.prenom || ''} ${c.nom || ''}`.trim()).toLowerCase().includes(q) ||
+                          String(c.ville || '').toLowerCase().includes(q) ||
+                          String(c.email || '').toLowerCase().includes(q) ||
+                          String(c.telephone || '').includes(q)
                         );
                       })
                       .map((c, i) => (
@@ -2182,6 +2227,82 @@ export const FacturesModule: React.FC<FacturesModuleProps> = ({
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          MODAL JUSTIFICATIFS DE FACTURE
+          ────────────────────────────────────────────────────────────────────
+          S'ouvre au clic sur le badge 📎 de la liste des factures.
+          Permet d'ajouter / visualiser / supprimer des justificatifs
+          (photos, reçus, bon de commande, bon de livraison, etc.) liés
+          à la facture sélectionnée.
+         ════════════════════════════════════════════════════════════════════ */}
+      {justifModalFacture && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          onClick={() => setJustifModalFacture(null)}
+        >
+          <div
+            className="bg-slate-50 rounded-xl shadow-2xl max-w-3xl w-full max-h-[92vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* En-tête du modal */}
+            <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-3 bg-gradient-to-r from-[#1a3050] to-[#2E86C1] text-white rounded-t-xl">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-lg shrink-0">📎</span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold truncate">
+                    Justificatifs — Facture {justifModalFacture.numero}
+                  </h3>
+                  <p className="text-[10px] text-white/70 truncate">
+                    {justifModalFacture.client} • {fm(justifModalFacture.total)} F • {justifModalFacture.date}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setJustifModalFacture(null)}
+                className="p-1.5 rounded-lg hover:bg-white/15 transition shrink-0"
+                title="Fermer"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Corps : composant JustificatifsDepense en mode factures */}
+            <div className="p-4">
+              <JustificatifsDepense
+                facture={justifModalFacture}
+                actionPrefix="factures"
+                titre="Justificatifs de la facture"
+                couleur="or"
+                onChange={chargerJustifCounts}
+              />
+
+              {/* Aide contextuelle */}
+              <div className="mt-3 px-3 py-2 rounded-lg bg-[#eaf2f8] border border-[#2E86C1]/20 text-[10px] text-slate-600">
+                <span className="font-bold text-[#1B4F72]">💡 Astuce :</span>{' '}
+                joignez ici tout document lié à cette facture : bon de commande signé,
+                bon de livraison, reçu de paiement, photo du produit livré, etc.
+                Les justificatifs sont stockés dans Google Drive et accessibles
+                depuis n'importe quel appareil connecté.
+              </div>
+            </div>
+
+            {/* Pied : bouton fermer */}
+            <div className="sticky bottom-0 px-5 py-3 bg-white border-t border-slate-200 rounded-b-xl flex justify-end">
+              <button
+                type="button"
+                onClick={() => setJustifModalFacture(null)}
+                className="px-4 py-2 rounded-lg text-xs font-bold text-white bg-[#1a3050] hover:bg-[#0f1f3a] transition"
+              >
+                Fermer
+              </button>
             </div>
           </div>
         </div>

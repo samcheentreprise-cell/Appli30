@@ -70,11 +70,17 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({
   };
 
   const filteredClients = clients.filter((c) => {
+    if (!c) return false;
+    const label = (c.label || '').toString().toLowerCase();
+    const phone = (c.telephone || '').toString().toLowerCase();
+    const city = (c.ville || '').toString().toLowerCase();
+    const search = searchTerm.toString().toLowerCase();
+    
     const matchSearch =
-      c.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.telephone.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.ville.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchCity = selectedCity === 'Toutes' || c.ville === selectedCity;
+      label.includes(search) ||
+      phone.includes(search) ||
+      city.includes(search);
+    const matchCity = selectedCity === 'Toutes' || (c.ville || 'Bamako') === selectedCity;
     return matchSearch && matchCity;
   });
 

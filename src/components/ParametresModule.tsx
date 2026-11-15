@@ -16,8 +16,13 @@ import {
   Smartphone,
   Plus,
   Loader2,
-  Save
+  Save,
+  BookOpen,
+  Download,
+  Eye
 } from 'lucide-react';
+import { GuideModal } from './GuideModal';
+import { downloadGuidePdf } from '../utils/guidePdf';
 import { 
   getGSheetWebappUrl, 
   setGSheetWebappUrl, 
@@ -67,6 +72,23 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
   const [keepGsheetUrlOnReset, setKeepGsheetUrlOnReset] = useState(true);
   const [resetSuccessToast, setResetSuccessToast] = useState(false);
   const [pingStatus, setPingStatus] = useState<{ testing: boolean; message?: string; success?: boolean } | null>(null);
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [guideDownloading, setGuideDownloading] = useState(false);
+  const [guideFeedback, setGuideFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleDownloadGuide = async () => {
+    setGuideDownloading(true);
+    setGuideFeedback(null);
+    try {
+      await downloadGuidePdf();
+      setGuideFeedback({ type: 'success', text: 'Guide PDF téléchargé avec succès !' });
+      setTimeout(() => setGuideFeedback(null), 4000);
+    } catch (err: any) {
+      setGuideFeedback({ type: 'error', text: err?.message || 'Erreur lors du téléchargement du PDF.' });
+    } finally {
+      setGuideDownloading(false);
+    }
+  };
 
   // ✅ Chargement des emails depuis GAS au montage du composant.
   useEffect(() => {
@@ -323,6 +345,53 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
           </p>
           <PWAInstallButton />
         </section>
+
+        {/* 1b. Documentation & Guide d'utilisation PDF */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-sky-200 space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-[#1B4F72]" />
+              <h2 className="text-base font-bold text-slate-800">Guide d&apos;utilisation officiel (PDF)</h2>
+            </div>
+            <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-sky-100 text-sky-800">
+              Document illustré
+            </span>
+          </div>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Consultez ou téléchargez le manuel complet de l&apos;application Couvoir SAMCHE avec captures d&apos;écran : gestion des rôles, cycle OAC (Commandes, Mirage J+18, Éclosion J+21), circuit d&apos;approbation, livraisons, ventes, factures/BL, caisse et rentabilité.
+          </p>
+          <div className="flex flex-wrap gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => setIsGuideOpen(true)}
+              className="px-4 py-2.5 bg-[#1B4F72] hover:bg-[#153e5a] text-white rounded-xl font-bold text-xs transition flex items-center gap-2 shadow-sm cursor-pointer"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Consulter le Guide</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadGuide}
+              disabled={guideDownloading}
+              className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 rounded-xl font-bold text-xs transition flex items-center gap-2 shadow-sm cursor-pointer"
+            >
+              {guideDownloading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              <span>{guideDownloading ? 'Téléchargement...' : 'Télécharger le Guide PDF'}</span>
+            </button>
+          </div>
+          {guideFeedback && (
+            <p className={`text-xs font-semibold flex items-center gap-1.5 ${guideFeedback.type === 'success' ? 'text-emerald-700' : 'text-rose-600'}`}>
+              {guideFeedback.type === 'success' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+              <span>{guideFeedback.text}</span>
+            </p>
+          )}
+        </section>
+
+        <GuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
 
         {/* 2. Synchronisation Google Sheets */}
         <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">

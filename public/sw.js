@@ -3,7 +3,7 @@
  * N'affecte pas l'interface visuelle, uniquement le réseau/cache.
  */
 
-const CACHE_VERSION = "samche-v2";
+const CACHE_VERSION = "samche-v3";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 
@@ -67,6 +67,8 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.protocol !== "http:" && url.protocol !== "https:") return;
+  // Ne jamais intercepter les routes API ni les fichiers PDF (évite tout retour HTML/cache corrompu)
+  if (url.pathname.startsWith("/api/") || url.pathname.toLowerCase().endsWith(".pdf")) return;
 
   // Stratégie network-first pour les navigations (HTML) => toujours frais
   if (request.mode === "navigate") {

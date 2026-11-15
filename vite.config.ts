@@ -41,6 +41,10 @@ export default defineConfig(({ mode }) => {
             { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
           ],
         },
+        workbox: {
+          navigateFallbackDenylist: [/^\/api\//, /\.pdf$/i, /guide-samche\.html$/i],
+          globIgnores: ['**/*.pdf', '**/guide-samche.html'],
+        },
         devOptions: {
           enabled: true,
           type: 'module',

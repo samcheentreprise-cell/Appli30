@@ -250,11 +250,11 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase();
         const match =
-          lot.id.toLowerCase().includes(q) ||
-          lot.fournisseur.toLowerCase().includes(q) ||
-          lot.race.toLowerCase().includes(q) ||
-          lot.type.toLowerCase().includes(q) ||
-          lot.dateEcloStr.includes(q);
+          String(lot.id || '').toLowerCase().includes(q) ||
+          String(lot.fournisseur || '').toLowerCase().includes(q) ||
+          String(lot.race || '').toLowerCase().includes(q) ||
+          String(lot.type || '').toLowerCase().includes(q) ||
+          String(lot.dateEcloStr || '').includes(q);
         if (!match) return false;
       }
       return true;

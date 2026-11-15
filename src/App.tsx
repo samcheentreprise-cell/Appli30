@@ -229,6 +229,42 @@ export default function App() {
     return syncPushToGoogleSheets({ ...payload, item: itemWithUser });
   };
 
+  // Helpers de parsing et formatage de dates sûrs (supporte dd/mm/yyyy et yyyy-mm-dd)
+  const parseFrDateMs = (dateStr?: string): number => {
+    if (!dateStr) return 0;
+    const s = String(dateStr).trim();
+    if (s.includes('/')) {
+      const [d, m, y] = s.split('/').map(Number);
+      if (d && m && y) return new Date(y, m - 1, d).getTime();
+    }
+    if (s.includes('-')) {
+      const [y, m, d] = s.split('-').map(Number);
+      if (d && m && y) return new Date(y, m - 1, d).getTime();
+    }
+    const ts = Date.parse(s);
+    return isNaN(ts) ? 0 : ts;
+  };
+
+  const toFrDate = (raw?: string): string => {
+    const s = String(raw || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-');
+      return `${d}/${m}/${y}`;
+    }
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return s;
+    return '';
+  };
+
+  const addDaysFr = (frDate: string, days: number): string => {
+    const p = frDate.split('/').map(Number);
+    if (p.length === 3 && p[0] && p[1] && p[2]) {
+      const dt = new Date(p[2], p[1] - 1, p[0]);
+      dt.setDate(dt.getDate() + days);
+      return `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
+    }
+    return '';
+  };
+
   // Handlers for OAC
   const handleAddOAC = async (newOac: OAC) => {
     setOacList((prev) => [newOac, ...prev]);
@@ -322,41 +358,43 @@ export default function App() {
   //     côté GAS (await), puis on rafraîchit les données
   // ============================================================
   // Admin validation handlers
-  const handleApproveSoumission = async (idSoumission: string, idChoisi: string, modifiedDonnees?: any) => {
+  const handleApproveSoumission = async (idSoumission: string, idChoisi: string, modifiedDonnees?: any): Promise<boolean> => {
     const target = soumissions.find((s) => s.idSoumission === idSoumission);
     if (!target) {
       console.error('[Approuver] Soumission introuvable:', idSoumission);
-      return;
+      alert('Soumission introuvable. Synchronisez les données et réessayez.');
+      return false;
     }
 
+    const soumType = (target.type as string) === 'Eclosion' ? 'Éclosion' : target.type;
     const todayStr = new Date().toLocaleDateString('fr-FR');
     const d = modifiedDonnees || target.donnees || {};
 
     // ── Calcul du resume mis à jour ──
     let updatedResume = target.resume;
-    if (target.type === 'Mirage') {
+    if (soumType === 'Mirage') {
       const targetId = d.id || target.donnees?.id;
       const clairsNum = Number(d.clairs) || 0;
       const existing = oacList.find((x) => x.id === targetId);
       const cubes = existing?.cubes || ((existing?.cartons || 0) * 360 - (existing?.nbCasses || 0)) || 0;
       const fertilesNum = Math.max(0, cubes - clairsNum);
       updatedResume = `Mirage lot ${targetId} : ${clairsNum} clairs, ${fertilesNum} fertiles`;
-    } else if (target.type === 'Éclosion') {
+    } else if (soumType === 'Éclosion') {
       const targetId = d.id || target.donnees?.id;
       const commNum = Number(d.commerciaux) || 0;
       const hanNum = Number(d.handicapes) || 0;
       const morNum = Number(d.morts) || 0;
       updatedResume = `Éclosion lot ${targetId} : ${commNum} commerciaux, ${hanNum} handicapés, ${morNum} morts`;
-    } else if (target.type === 'Commande') {
+    } else if (soumType === 'Commande') {
       updatedResume = `Commande ${d.type || 'Chairs'} (${d.race || 'Ross 308'}) - ${d.cartons || 0} cartons (${d.fournisseur || ''})`;
     }
 
     // ── Vérifier le verrouillage avant d'approuver un Mirage/Éclosion ──
-    if (target.type === 'Mirage' || target.type === 'Éclosion') {
+    if (soumType === 'Mirage' || soumType === 'Éclosion') {
       const targetId = d.id || target.donnees?.id;
       const existing = oacList.find((x) => x.id === targetId);
-      if (!assertOacUnlocked(existing, target.type.toLowerCase())) {
-        return; // bloqué : OAC verrouillée
+      if (!assertOacUnlocked(existing, soumType.toLowerCase())) {
+        return false; // bloqué : OAC verrouillée
       }
     }
 
@@ -366,45 +404,44 @@ export default function App() {
     let oacSyncRes: SyncResult;
     let newOrderForList: OAC | null = null;
 
-    if (target.type === 'Commande') {
-      const dateParts = (d.date || '').split('-');
-      const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : todayStr;
-      const cartons = Number(d.cartons) || 10;
+    if (soumType === 'Commande') {
+      const formattedDate = toFrDate(d.date) || todayStr;
+      const cartons = Number(d.cartons) || 0;
+      if (cartons <= 0) {
+        alert('ÉCHEC : Le nombre de cartons doit être supérieur à 0.');
+        return false;
+      }
       const casses = Number(d.casses) || 0;
       const totalRecus = cartons * 360;
-      const cubes = totalRecus - casses;
+      const cubes = Math.max(0, totalRecus - casses);
 
-      // ✅ CORRECTION v1.2.7 (fix "ID est obligatoire") :
-      //    On calcule un ID de fallback robuste basé sur l'année/mois courants
-      //    (au lieu du "OAC-2609-..." codé en dur qui pouvait collisionner).
-      //    Si `idChoisi` est fourni (cas normal via le modal d'approbation),
-      //    on l'utilise. Sinon, on tombe sur `d.id`, puis sur l'auto-généré.
-      //    On garantit ainsi que `id` et `idCommande` ne sont JAMAIS vides.
+      // Générer un ID de fallback non collisionnant basé sur l'année/mois courants
       const _now = new Date();
       const _yy = String(_now.getFullYear()).slice(-2);
       const _mm = String(_now.getMonth() + 1).padStart(2, '0');
-      const fallbackId = `OAC-${_yy}${_mm}-${String(oacList.length + 1).padStart(3, '0')}`;
+      const existingIds = new Set(oacList.map((o) => o.id));
+      let seq = oacList.length + 1;
+      let fallbackId = `OAC-${_yy}${_mm}-${String(seq).padStart(3, '0')}`;
+      while (existingIds.has(fallbackId)) {
+        seq++;
+        fallbackId = `OAC-${_yy}${_mm}-${String(seq).padStart(3, '0')}`;
+      }
       const safeId = (idChoisi && String(idChoisi).trim())
         || (d.id && String(d.id).trim())
         || fallbackId;
 
-      // ✅ v1.3.9 : Si la soumission n'a ni dateIncubation ni eclosion (cas ancien),
-      //    on calcule une date d'éclosion par défaut = aujourd'hui + 21 jours.
-      //    Cela évite que l'approbation échoue à cause d'une date d'éclosion passée.
       const _todayPlus21 = new Date();
       _todayPlus21.setDate(_todayPlus21.getDate() + 21);
       const _defaultEclo = `${String(_todayPlus21.getDate()).padStart(2, '0')}/${String(_todayPlus21.getMonth() + 1).padStart(2, '0')}/${_todayPlus21.getFullYear()}`;
       const _defaultIncub = `${String(_now.getDate()).padStart(2, '0')}/${String(_now.getMonth() + 1).padStart(2, '0')}/${_now.getFullYear()}`;
 
+      const rawIncubFr = toFrDate((d as any).dateIncubation);
+      const rawEcloFr = toFrDate(d.eclosion);
+      const finalIncubFr = rawIncubFr || (rawEcloFr ? addDaysFr(rawEcloFr, -21) : '') || _defaultIncub;
+      const finalEcloFr = (rawIncubFr ? addDaysFr(rawIncubFr, 21) : '') || rawEcloFr || _defaultEclo;
+
       const newOrder: OAC = {
         _v: 25,
-        // ✅ CORRECTION v1.2.8 : Ne PAS définir `ligne` pour une nouvelle commande.
-        //    Le backend `enregistrerCommande` (v1.2.8+) calcule lui-même la prochaine
-        //    ligne disponible via `_getDerniereLigneDonnees(ws) + 1`.
-        //    Forcer `ligne = oacList.length + 3` causait des bugs :
-        //      - si la ligne pointait hors de la plage → "Ligne inexistante"
-        //      - si la ligne correspondait à un autre ID → "ID deja utilise"
-        //    On laisse le backend décider.
         ligne: 0,
         id: safeId,
         idCommande: safeId,
@@ -416,21 +453,9 @@ export default function App() {
         recus: totalRecus,
         nbCasses: casses,
         cubes,
-        // ✅ v1.3.9 : On transmet `dateIncubation` au backend (nouveau flux v1.3.8)
-        //   - Si la soumission a dateIncubation → on l'utilise
-        //   - Sinon, on calcule dateIncubation = eclosion - 21j (rétrocompat)
-        //   - En dernier recours, on utilise aujourd'hui comme date d'incubation
-        dateIncubation: (d as any).dateIncubation
-          || (d.eclosion ? (() => {
-              const _p = (d.eclosion as string).split('/');
-              if (_p.length === 3) {
-                const _e = new Date(Number(_p[2]), Number(_p[1]) - 1, Number(_p[0]));
-                _e.setDate(_e.getDate() - 21);
-                return `${String(_e.getDate()).padStart(2, '0')}/${String(_e.getMonth() + 1).padStart(2, '0')}/${_e.getFullYear()}`;
-              }
-              return _defaultIncub;
-            })() : _defaultIncub),
-        eclosion: d.eclosion || _defaultEclo,
+        dateIncubation: finalIncubFr,
+        eclosion: finalEcloFr,
+        statut: 'En incubation',
         clairs: null,
         fertiles: cubes,
         commerciaux: null,
@@ -439,21 +464,18 @@ export default function App() {
         morts: null,
       } as any;
 
-      // ✅ Safety net : si jamais safeId est vide (cas théorique impossible),
-      //    on bloque AVANT d'envoyer à GAS pour avoir un message clair.
       if (!newOrder.id || !newOrder.idCommande) {
         const errMsg = 'ID commande manquant après calcul (safeId vide). Valeurs reçues : idChoisi="' + idChoisi + '", d.id="' + d.id + '"';
         console.error('[Approuver][Commande]', errMsg);
         alert(`ÉCHEC : ${errMsg}\n\nVeuillez sélectionner un ID dans le modal d'approbation.`);
-        return;
+        return false;
       }
 
       const itemWithUser = withCurrentUser(newOrder as any);
-      // ✅ v1.3.9 : Log détaillé des données envoyées au backend (pour diagnostic)
-      console.log('[Approuver][Commande] v1.3.9 - Données envoyées à GAS :', {
+      console.log('[Approuver][Commande] Données envoyées à GAS :', {
         id: newOrder.id,
         date: newOrder.date,
-        dateIncubation: (newOrder as any).dateIncubation,
+        dateIncubation: newOrder.dateIncubation,
         eclosion: newOrder.eclosion,
         cartons: newOrder.cartons,
         casses: newOrder.nbCasses,
@@ -467,29 +489,28 @@ export default function App() {
       if (!oacSyncRes.success) {
         const msg = oacSyncRes.code ? oacErrorMessage(oacSyncRes.code, oacSyncRes.message) : oacSyncRes.message;
         console.error('[Approuver][Commande] ÉCHEC écriture OAC:', oacSyncRes);
-        // ✅ v1.3.9 : Afficher aussi le code d'erreur pour diagnostic précis
         alert(
           `ÉCHEC : la commande n'a pas pu être enregistrée dans la base.\n\n` +
           `Code erreur : ${oacSyncRes.code || 'AUCUN'}\n` +
           `Détail : ${msg}\n\n` +
           `La soumission reste « En attente ». Corrigez les données et réessayez.`
         );
-        return; // ⛔ Ne PAS marquer comme approuvée
+        return false; // ⛔ Ne PAS marquer comme approuvée
       }
       newOrderForList = newOrder;
       console.log('[Approuver][Commande] ✅ OAC enregistrée dans Google Sheets');
 
-    } else if (target.type === 'Mirage') {
+    } else if (soumType === 'Mirage') {
       const targetId = d.id || target.donnees?.id;
       const existing = oacList.find((x) => x.id === targetId);
       if (!existing) {
         alert(`ÉCHEC : OAC introuvable pour le mirage (ID: ${targetId}). Impossible de valider.`);
-        return;
+        return false;
       }
       const cubes = existing.cubes || ((existing.cartons || 0) * 360 - (existing.nbCasses || 0));
       const clairsNum = Number(d.clairs) || 0;
       const fertilesNum = Math.max(0, cubes - clairsNum);
-      const updated: OAC = { ...existing, clairs: clairsNum, fertiles: fertilesNum };
+      const updated: OAC = { ...existing, clairs: clairsNum, fertiles: fertilesNum, statut: 'Miré' };
 
       const itemWithUser = withCurrentUser(updated as any);
       oacSyncRes = await syncPushToGoogleSheets({
@@ -508,23 +529,26 @@ export default function App() {
             `La soumission reste « En attente ». Réessayez.`
           );
         }
-        return; // ⛔ Ne PAS marquer comme approuvée
+        return false; // ⛔ Ne PAS marquer comme approuvée
       }
       // ✅ Succès — mettre à jour l'UI locale
       setOacList((prev) => prev.map((x) => (x.id === targetId ? updated : x)));
       console.log('[Approuver][Mirage] ✅ Mirage enregistré dans Google Sheets');
 
-    } else if (target.type === 'Éclosion') {
+    } else if (soumType === 'Éclosion') {
       const targetId = d.id || (target.donnees && target.donnees.id);
       const existing = oacList.find((x) => x.id === targetId);
       if (!existing) {
         alert(`ÉCHEC : OAC introuvable pour l'éclosion (ID: ${targetId}). Impossible de valider.`);
-        return;
+        return false;
       }
       const commNum = Number(d.commerciaux) || 0;
       const hanNum = Number(d.handicapes) || 0;
       const morNum = Number(d.morts) || 0;
-      const pourVenteNum = Number(d.pourVente) || commNum;
+      const bonus = Math.ceil(commNum * 0.02);
+      const pourVenteNum = (d.pourVente !== undefined && d.pourVente !== null && d.pourVente !== '')
+        ? Number(d.pourVente)
+        : Math.max(0, commNum - bonus);
 
       const updated: OAC = {
         ...existing,
@@ -533,6 +557,7 @@ export default function App() {
         handicapes: hanNum,
         morts: morNum,
         pourVente: pourVenteNum,
+        statut: 'Éclos',
         complet: true,
       };
 
@@ -553,7 +578,7 @@ export default function App() {
             `La soumission reste « En attente ». Réessayez.`
           );
         }
-        return; // ⛔ Ne PAS marquer comme approuvée
+        return false; // ⛔ Ne PAS marquer comme approuvée
       }
       // ✅ Succès — mettre à jour l'UI locale
       setOacList((prev) => prev.map((x) => (x.id === targetId ? updated : x)));
@@ -561,35 +586,26 @@ export default function App() {
 
     } else {
       console.error('[Approuver] Type de soumission non supporté:', target.type);
-      return;
+      alert(`Type de soumission non supporté : ${target.type}`);
+      return false;
+    }
+
+    // Pour une nouvelle commande, ajouter (ou remplacer sans doublon) l'OAC dans la liste locale
+    if (newOrderForList) {
+      setOacList((prev) => {
+        const exists = prev.some((o) => o.id === (newOrderForList as OAC).id);
+        return exists
+          ? prev.map((o) => (o.id === (newOrderForList as OAC).id ? (newOrderForList as OAC) : o))
+          : [newOrderForList as OAC, ...prev];
+      });
     }
 
     // ============================================================
     // ÉTAPE 2 — L'OAC est bien en base : on marque la soumission
-    //            « Approuvée » localement et côté GAS (await)
+    //            « Approuvée » côté GAS (await) puis localement
     // ============================================================
-    setSoumissions((prev) =>
-      prev.map((s) =>
-        s.idSoumission === idSoumission
-          ? {
-              ...s,
-              statut: 'Approuvé',
-              resume: updatedResume,
-              idChoisi,
-              validPar: currentUser?.username || 'Administrateur',
-              dateValid: todayStr,
-            }
-          : s
-      )
-    );
-
-    // Pour une nouvelle commande, ajouter l'OAC dans la liste locale
-    if (newOrderForList) {
-      setOacList((prev) => [newOrderForList as OAC, ...prev]);
-    }
-
-    // ✅ AWAIT la mise à jour du statut de la soumission dans GAS
-    const soumRes = await syncPushToGoogleSheets({
+    const validPar = currentUser?.username || 'Administrateur';
+    const soumRes = await syncWithUser({
       type: 'en_attente',
       action: 'update',
       item: {
@@ -597,67 +613,41 @@ export default function App() {
         statut: 'Approuvé',
         resume: updatedResume,
         idChoisi,
-        validPar: currentUser?.username || 'Administrateur',
+        validPar,
         dateValid: todayStr,
       },
     });
     if (!soumRes.success) {
-      // ⚠️ CORRECTION ANOMALIE : si la mise à jour du statut échoue,
-      //    on NE PAS APPELLE PAS handleTriggerSync() — sinon le refresh
-      //    rechargerait les soumissions depuis GAS avec le statut "En attente"
-      //    (puisque l'update a échoué), et l'UI reviendrait à "En attente"
-      //    malgré que l'OAC a bien été enregistrée.
-      //    On alerte l'utilisateur à la place, en gardant l'UI local "Approuvé".
       console.error('[Approuver] ⚠ OAC enregistrée mais mise à jour du statut soumission a échoué:', soumRes);
       playAlertSound('error');
       alert(
         `⚠️ Attention : l'OAC a bien été enregistrée dans la base, ` +
         `mais la mise à jour du statut de la soumission a échoué.\n\n` +
         `Détail : ${soumRes.message}\n\n` +
-        `La soumission reste marquée "Approuvée" dans l'interface, ` +
-        `mais elle pourrait réapparaître en "En attente" après le prochain refresh.\n\n` +
-        `Re-cliquez sur "Valider" pour réessayer.`
+        `La soumission reste « En attente » pour que vous puissiez réessayer la validation.`
       );
-      return;
+      return false;
     }
-    console.log('[Approuver] ✅ Soumission marquée « Approuvée » dans Google Sheets');
 
-    // ============================================================
-    // ✅ SOLUTION DÉFINITIVE — On NE rappelle PAS handleTriggerSync()
-    // ------------------------------------------------------------
-    // Pourquoi : la lecture GAS juste après une écriture peut retourner
-    // des données légèrement "stale" (consistance eventuelle de GAS).
-    // En pratique, ça donnait lieu au bug suivant :
-    //   1. setSoumissions() met à jour l'UI local en "Approuvé"
-    //   2. syncPushToGoogleSheets() met à jour GAS en "Approuvé"
-    //   3. handleTriggerSync() relit les soumissions depuis GAS
-    //      → GAS retourne encore "En attente" (données stales)
-    //      → setSoumissions() remet l'UI à "En attente" ❌
-    //
-    // Solution définitive : le state local EST la source de vérité
-    // après une opération réussie. On ne rafraîchit pas depuis GAS
-    // parce qu'on sait déjà ce qu'on vient d'écrire.
-    //
-    // L'utilisateur peut toujours cliquer sur le bouton « Synchroniser »
-    // (en haut à droite) pour forcer un refresh complet depuis GAS.
-    //
-    // Note : pour une nouvelle Commande, l'OAC a déjà été ajoutée
-    // localement via setOacList(). Pour un Mirage/Éclosion, l'OAC
-    // existante a déjà été mise à jour via setOacList(). Donc l'UI
-    // est cohérente sans avoir besoin de refresh.
-    // ============================================================
-    console.log('[Approuver] ✅ Validation terminée. UI local reste sur "Approuvé" (pas de refresh automatique pour éviter la stale read).');
+    setSoumissions((prev) =>
+      prev.map((s) =>
+        s.idSoumission === idSoumission
+          ? {
+              ...s,
+              statut: 'Approuvé',
+              resume: updatedResume,
+              validPar,
+              dateValid: todayStr,
+              donnees: { ...(s.donnees || {}), ...d, id: soumType === 'Commande' ? (newOrderForList?.id || idChoisi) : (d.id || s.donnees?.id) },
+            }
+          : s
+      )
+    );
+    console.log('[Approuver] ✅ Soumission marquée « Approuvée » dans Google Sheets');
+    return true;
   };
 
-  // ============================================================
-  // ✅ ANOMALIE CORRIGÉE — handleAddSoumission async + vérification
-  //    Avant : la soumission était ajoutée à l'UI mais l'écriture
-  //    vers GAS était fire-and-forget. Si GAS échouait, l'opérateur
-  //    pensait que sa saisie était partie, mais aucune ligne n'était
-  //    en base → l'admin ne voyait jamais la soumission à valider.
-  //    Maintenant : on AWAIT l'écriture et on alerte en cas d'échec.
-  // ============================================================
-  const handleAddSoumission = async (newSoumission: SoumissionEnAttente) => {
+  const handleAddSoumission = async (newSoumission: SoumissionEnAttente): Promise<boolean> => {
     // Ajout optimiste dans l'UI
     setSoumissions((prev) => [newSoumission, ...prev]);
 
@@ -677,12 +667,13 @@ export default function App() {
         `Détail : ${res.message}\n\n` +
         `Vérifiez votre connexion puis réessayez.`
       );
-      return;
+      return false;
     }
     console.log('[handleAddSoumission] ✅ Soumission enregistrée dans Google Sheets:', newSoumission.idSoumission);
+    return true;
   };
 
-  const handleUpdateSoumission = async (updated: SoumissionEnAttente) => {
+  const handleUpdateSoumission = async (updated: SoumissionEnAttente): Promise<boolean> => {
     // Mise à jour optimiste
     const previous = soumissions.find((s) => s.idSoumission === updated.idSoumission);
     setSoumissions((prev) => prev.map((s) => (s.idSoumission === updated.idSoumission ? updated : s)));
@@ -696,15 +687,14 @@ export default function App() {
         setSoumissions((prev) => prev.map((s) => (s.idSoumission === updated.idSoumission ? previous : s)));
       }
       alert(`ÉCHEC : la mise à jour de la soumission a échoué.\n\nDétail : ${res.message}`);
-    } else {
-      console.log('[handleUpdateSoumission] ✅ Soumission mise à jour dans Google Sheets:', updated.idSoumission);
+      return false;
     }
+    console.log('[handleUpdateSoumission] ✅ Soumission mise à jour dans Google Sheets:', updated.idSoumission);
+    return true;
   };
 
-  const handleRejectSoumission = async (idSoumission: string, raison: string) => {
+  const handleRejectSoumission = async (idSoumission: string, raison: string): Promise<boolean> => {
     const todayStr = new Date().toLocaleDateString('fr-FR');
-    // Play rejection sound on mobile & desktop
-    playAlertSound('rejection');
     const validPar = currentUser?.username || 'Administrateur';
 
     // Mise à jour optimiste
@@ -731,12 +721,13 @@ export default function App() {
         setSoumissions((prev) => prev.map((s) => (s.idSoumission === idSoumission ? previous : s)));
       }
       alert(`ÉCHEC : le rejet n'a pas pu être enregistré dans la base.\n\nDétail : ${res.message}`);
-    } else {
-      console.log('[handleRejectSoumission] ✅ Soumission marquée « Rejeté » dans Google Sheets:', idSoumission);
+      return false;
     }
+    console.log('[handleRejectSoumission] ✅ Soumission marquée « Rejeté » dans Google Sheets:', idSoumission);
+    return true;
   };
 
-  const handleDeleteSoumission = async (idSoumission: string) => {
+  const handleDeleteSoumission = async (idSoumission: string): Promise<boolean> => {
     // Suppression optimiste
     const previous = soumissions.find((s) => s.idSoumission === idSoumission);
     setSoumissions((prev) => prev.filter((s) => s.idSoumission !== idSoumission));
@@ -745,7 +736,7 @@ export default function App() {
     const res = await syncWithUser({
       type: 'en_attente',
       action: 'delete',
-      item: { idSoumission }
+      item: { idSoumission, ligne: previous?.ligne }
     });
 
     if (!res.success) {
@@ -755,9 +746,10 @@ export default function App() {
         setSoumissions((prev) => [previous, ...prev.filter((s) => s.idSoumission !== idSoumission)]);
       }
       alert(`ÉCHEC : la suppression de la soumission a échoué.\n\nDétail : ${res.message}`);
-    } else {
-      console.log('[handleDeleteSoumission] ✅ Soumission supprimée de Google Sheets:', idSoumission);
+      return false;
     }
+    console.log('[handleDeleteSoumission] ✅ Soumission supprimée de Google Sheets:', idSoumission);
+    return true;
   };
 
   const handleRefreshSoumissions = () => {
@@ -788,11 +780,7 @@ export default function App() {
   };
 
   const handleAddDepense = async (newDepense: Depense) => {
-    setDepenses((prev) => [...prev, newDepense].sort((a, b) => {
-      const [dA, mA, yA] = a.date.split('/').map(Number);
-      const [dB, mB, yB] = b.date.split('/').map(Number);
-      return new Date(yA, mA - 1, dA).getTime() - new Date(yB, mB - 1, dB).getTime();
-    }));
+    setDepenses((prev) => [...prev, newDepense].sort((a, b) => parseFrDateMs(a.date) - parseFrDateMs(b.date)));
     const res = await syncWithUser({ type: 'depenses', action: 'insert', item: newDepense });
     if (res.success) {
       handleTriggerSync();
@@ -801,11 +789,7 @@ export default function App() {
 
   const handleUpdateDepense = async (updated: Depense) => {
     setDepenses((prev) =>
-      prev.map((d) => (d.ligne === updated.ligne ? updated : d)).sort((a, b) => {
-        const [dA, mA, yA] = a.date.split('/').map(Number);
-        const [dB, mB, yB] = b.date.split('/').map(Number);
-        return new Date(yA, mA - 1, dA).getTime() - new Date(yB, mB - 1, dB).getTime();
-      })
+      prev.map((d) => (d.ligne === updated.ligne ? updated : d)).sort((a, b) => parseFrDateMs(a.date) - parseFrDateMs(b.date))
     );
     const res = await syncWithUser({ type: 'depenses', action: 'update', item: updated });
     if (res.success) {
@@ -877,7 +861,7 @@ export default function App() {
   const handleAddCommandePoussin = async (cmd: CommandePoussin) => {
   setCommandesPoussins((prev) => [cmd, ...prev]);
 
-  const res = await syncPushToGoogleSheets({
+  const res = await syncWithUser({
     type: 'commandes_poussins' as any,
     action: 'insert',
     item: {
@@ -908,31 +892,29 @@ export default function App() {
     setCommandesPoussins((prev) =>
       prev.map((c) => (c.id === updated.id ? updated : c))
     );
-    const res = await syncPushToGoogleSheets({ type: 'commandes_poussins' as any, action: 'update', item: updated });
+    const res = await syncWithUser({ type: 'commandes_poussins' as any, action: 'update', item: updated });
     if (!res.success) {
       console.error('[CommandePoussin] update sync failed:', res.message);
-      // Optional: Revert optimistic update here if needed
     }
   };
 
   const handleDeleteCommandePoussin = async (id: string) => {
     const target = commandesPoussins.find((c) => c.id === id);
     setCommandesPoussins((prev) => prev.filter((c) => c.id !== id));
-    const res = await syncPushToGoogleSheets({
+    const res = await syncWithUser({
       type: 'commandes_poussins' as any,
       action: 'delete',
       item: { id, rowIndex: (target as any)?.rowIndex || 2 }
     });
     if (!res.success) {
       console.error('[CommandePoussin] delete sync failed:', res.message);
-      // Optional: Revert optimistic deletion if sync failed
       if (target) setCommandesPoussins((prev) => [target, ...prev]);
     }
   };
 
   const handleAddClient = async (newClient: Client) => {
     setClients((prev) => [newClient, ...prev]);
-    const res = await syncPushToGoogleSheets({ type: 'clients', action: 'insert', item: newClient });
+    const res = await syncWithUser({ type: 'clients', action: 'insert', item: newClient });
     if (res.success) {
       handleTriggerSync();
     }
@@ -940,7 +922,7 @@ export default function App() {
 
   const handleUpdateClient = async (updated: Client) => {
     setClients((prev) => prev.map((c) => (c.index === updated.index ? updated : c)));
-    const res = await syncPushToGoogleSheets({ type: 'clients', action: 'update' as any, item: updated });
+    const res = await syncWithUser({ type: 'clients', action: 'update' as any, item: updated });
     if (res.success) {
       handleTriggerSync();
     }
@@ -948,7 +930,7 @@ export default function App() {
 
   const handleDeleteClient = async (index: number) => {
     setClients((prev) => prev.filter((c) => c.index !== index));
-    const res = await syncPushToGoogleSheets({ type: 'clients', action: 'delete' as any, item: { index } });
+    const res = await syncWithUser({ type: 'clients', action: 'delete' as any, item: { index } });
     if (res.success) {
       handleTriggerSync();
     }
@@ -956,7 +938,7 @@ export default function App() {
 
   const handleUpdateFacture = async (updated: Facture) => {
     setFactures((prev) => prev.map((f) => (f.ligne === updated.ligne ? updated : f)));
-    const res = await syncPushToGoogleSheets({ type: 'factures' as any, action: 'update', item: updated });
+    const res = await syncWithUser({ type: 'factures' as any, action: 'update', item: updated });
     if (res.success) {
       handleTriggerSync();
     }
@@ -964,7 +946,7 @@ export default function App() {
 
   const handleDeleteFacture = async (ligne: number) => {
     setFactures((prev) => prev.filter((f) => f.ligne !== ligne));
-    const res = await syncPushToGoogleSheets({ type: 'factures' as any, action: 'delete', item: { ligne } });
+    const res = await syncWithUser({ type: 'factures' as any, action: 'delete', item: { ligne } });
     if (res.success) {
       handleTriggerSync();
     }
@@ -972,7 +954,7 @@ export default function App() {
 
   const handleAddBordereau = async (bl: Bordereau) => {
     setBordereaux((prev) => [bl, ...prev]);
-    const res = await syncPushToGoogleSheets({ type: 'bordereaux', action: 'insert', item: bl });
+    const res = await syncWithUser({ type: 'bordereaux', action: 'insert', item: bl });
     if (res.success) {
       handleTriggerSync();
     }
@@ -1015,11 +997,7 @@ export default function App() {
         setVentes(result.parsedData.ventes);
       }
       if (result.parsedData.depenses !== undefined) {
-        setDepenses(result.parsedData.depenses.sort((a, b) => {
-          const [dA, mA, yA] = a.date.split('/').map(Number);
-          const [dB, mB, yB] = b.date.split('/').map(Number);
-          return new Date(yA, mA - 1, dA).getTime() - new Date(yB, mB - 1, dB).getTime();
-        }));
+        setDepenses([...result.parsedData.depenses].sort((a, b) => parseFrDateMs(a.date) - parseFrDateMs(b.date)));
       }
       if (result.parsedData.mouvementsCaisse !== undefined) {
         setMouvementsCaisse(result.parsedData.mouvementsCaisse);
@@ -1033,7 +1011,7 @@ export default function App() {
       if (result.parsedData.bordereaux !== undefined) {
         setBordereaux(result.parsedData.bordereaux);
       }
-      if (result.parsedData.soumissions !== undefined && result.parsedData.soumissions.length > 0) {
+      if (result.parsedData.soumissions !== undefined && (result.parsedData.soumissions.length > 0 || result.parsedData.soumissionsOk)) {
         setSoumissions(result.parsedData.soumissions);
       }
     }
@@ -1142,7 +1120,7 @@ export default function App() {
       .sort((a, b) => {
         // Tri : "En attente" (non lues) d'abord, puis par date
         if (a.lue !== b.lue) return a.lue ? 1 : -1;
-        return b.date.localeCompare(a.date);
+        return parseFrDateMs(b.date) - parseFrDateMs(a.date);
       });
   }, [soumissions]);
 
@@ -1320,6 +1298,9 @@ export default function App() {
                 onUpdateVente={handleUpdateVente}
                 onDeleteVente={handleDeleteVente}
                 onAddClient={handleAddClient}
+                commandes={commandesPoussins}
+                currentUsername={currentUser?.username}
+                onRefreshVentes={handleTriggerSync}
                 onClose={() => setActiveTab('dashboard')}
               />
             )}

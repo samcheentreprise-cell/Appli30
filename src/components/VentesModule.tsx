@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Vente, Client, OAC } from '../types';
-import { getFParamData } from '../services/googleSheet';
+import { Vente, Client, OAC, CommandePoussin } from '../types';
+import { getFParamData, callApi } from '../services/googleSheet';
 
 const parseDate = (v: unknown): Date | null => {
   if (v === null || v === undefined || v === '') return null;
@@ -11,6 +11,13 @@ const parseDate = (v: unknown): Date | null => {
   return isNaN(d.getTime()) ? null : d;
 };
 
+// Référence de commande liée à une vente (ex: "CMD-20261106-143021" dans l'observation).
+// Renseignée automatiquement par le backend quand une commande passe en « Confirmée ».
+const getCommandeRef = (obs?: string): string => {
+  const m = String(obs || '').match(/CMD-[A-Za-z0-9-]+/);
+  return m ? m[0] : '';
+};
+
 interface VentesModuleProps {
   ventes: Vente[];
   clients: Client[];
@@ -19,6 +26,9 @@ interface VentesModuleProps {
   onUpdateVente?: (vente: Vente) => void;
   onDeleteVente?: (ligne: number) => void;
   onAddClient?: (client: Client) => void;
+  commandes?: CommandePoussin[];
+  currentUsername?: string;
+  onRefreshVentes?: () => void;
   onClose?: () => void;
 }
 
@@ -30,6 +40,9 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
   onUpdateVente,
   onDeleteVente,
   onAddClient,
+  commandes,
+  currentUsername,
+  onRefreshVentes,
   onClose,
 }) => {
   // ─────────────────────────────────────────────────────────────────
@@ -395,6 +408,67 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
       raz();
       setShowForm(false);
     }
+  };
+
+  // Rattrapage : crée la vente brouillon des commandes confirmées qui n'en ont pas encore
+  const [rattrapageEnCours, setRattrapageEnCours] = useState(false);
+  const handleRattrapageVentes = async () => {
+    if (!commandes) return;
+    const refsExistantes = new Set(ventes.map((v) => getCommandeRef(v.observation)).filter(Boolean));
+    const aTraiter = commandes.filter((c) => c.statut === 'Confirmée' && !refsExistantes.has(c.id));
+    if (aTraiter.length === 0) {
+      showNotif('Toutes les commandes confirmées ont déjà une vente liée.', true);
+      return;
+    }
+    // Nom de l'utilisateur connecté : état de l'app, puis repli sur le stockage local
+    let username = currentUsername || '';
+    if (!username) {
+      try {
+        const stored = JSON.parse(localStorage.getItem('samche_user') || 'null');
+        username = stored?.username || '';
+      } catch {
+        username = '';
+      }
+    }
+    if (!username) {
+      showNotif("Impossible d'identifier l'utilisateur connecté. Déconnectez-vous puis reconnectez-vous.", false);
+      return;
+    }
+    setRattrapageEnCours(true);
+    let ok = 0;
+    let ignorees = 0;
+    let ko = 0;
+    let premierMotif = '';
+    for (const c of aTraiter) {
+      try {
+        const res = await callApi(
+          'ventes.creerDepuisCommande',
+          { idCommande: c.id, username },
+          'POST'
+        );
+        if (res?.success) {
+          ok++;
+        } else if (res?.skipped) {
+          ignorees++;
+        } else {
+          ko++;
+          if (!premierMotif) premierMotif = res?.message || res?.error || JSON.stringify(res);
+        }
+      } catch (err: any) {
+        ko++;
+        if (!premierMotif) premierMotif = err?.message || String(err);
+      }
+    }
+    setRattrapageEnCours(false);
+    const details = [
+      ignorees ? `${ignorees} ignorée(s) : date d'éclosion dépassée` : '',
+      ko ? `${ko} erreur(s)${premierMotif ? ` (ex. : ${premierMotif})` : ''}` : '',
+    ].filter(Boolean).join(' ; ');
+    showNotif(
+      `${ok} vente(s) créée(s)${details ? ` — ${details}` : ''}.`,
+      ko === 0
+    );
+    if (ok > 0 && onRefreshVentes) onRefreshVentes();
   };
 
   const filteredVentes = useMemo(() => {
@@ -1002,6 +1076,11 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
                   <span className="opacity-70">📝</span>
                   <span>Observation</span>
                 </label>
+                {getCommandeRef(observation) && (
+                  <p className="mb-1.5 text-[11px] font-bold text-[#1B4F72]">
+                    Vente liée à la commande {getCommandeRef(observation)}. Pour la valider, choisissez le statut de paiement puis enregistrez. Gardez la référence CMD dans l'observation.
+                  </p>
+                )}
                 <textarea
                   rows={2}
                   placeholder="Détail complémentaire..."
@@ -1056,9 +1135,22 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
         )}
 
         {/* ─────────── COMPTEUR RÉSULTATS ─────────── */}
-        <div className="px-5 sm:px-6 py-2 text-[11px] text-slate-500 font-medium border-b border-slate-100 bg-[#fafbfc]">
-          {filteredVentes.length} résultat(s) sur {ventes.length}
-          {searchFilter || filtrePaie || filtreType ? ' (filtré)' : ''}
+        <div className="px-5 sm:px-6 py-2 text-[11px] text-slate-500 font-medium border-b border-slate-100 bg-[#fafbfc] flex flex-wrap items-center justify-between gap-2">
+          <span>
+            {filteredVentes.length} résultat(s) sur {ventes.length}
+            {searchFilter || filtrePaie || filtreType ? ' (filtré)' : ''}
+          </span>
+          {commandes && onRefreshVentes && (
+            <button
+              type="button"
+              onClick={handleRattrapageVentes}
+              disabled={rattrapageEnCours}
+              className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase bg-[#1B4F72] text-white hover:bg-[#154360] disabled:opacity-50 transition"
+              title="Crée la vente brouillon des commandes confirmées qui n'en ont pas encore"
+            >
+              {rattrapageEnCours ? '⏳ En cours…' : '📦 Créer les ventes des commandes confirmées'}
+            </button>
+          )}
         </div>
 
         {/* ─────────── TABLEAU ─────────── */}
@@ -1111,6 +1203,18 @@ export const VentesModule: React.FC<VentesModuleProps> = ({
                     </td>
                     <td className="px-3 py-2.5 font-bold text-slate-900 whitespace-nowrap">
                       {v.client}
+                      {getCommandeRef(v.observation) && (
+                        <div className="mt-0.5 flex items-center gap-1 text-[10px] font-bold">
+                          <span className="px-1.5 py-0.5 rounded bg-[#eaf2f8] text-[#1B4F72]">
+                            📦 {getCommandeRef(v.observation)}
+                          </span>
+                          {v.statutPaiement === 'Non payee' && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#fef5e7] text-[#b9770e]">
+                              À valider
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-slate-800 whitespace-nowrap">
                       {v.produit}

@@ -191,11 +191,11 @@ interface OACModuleProps {
   onDeleteOAC: (id: string) => void;
   // ✅ Les handlers deviennent async pour permettre l'attente de
   //    l'enregistrement côté GAS avant d'afficher le toast de succès.
-  onAddSoumission: (soumission: SoumissionEnAttente) => Promise<void> | void;
-  onApproveSoumission: (idSoumission: string, idChoisi: string, donneesModifiees?: any) => Promise<void> | void;
-  onRejectSoumission: (idSoumission: string, raison: string) => Promise<void> | void;
-  onUpdateSoumission?: (soumission: SoumissionEnAttente) => Promise<void> | void;
-  onDeleteSoumission?: (idSoumission: string) => Promise<void> | void;
+  onAddSoumission: (soumission: SoumissionEnAttente) => Promise<boolean | void> | boolean | void;
+  onApproveSoumission: (idSoumission: string, idChoisi: string, donneesModifiees?: any) => Promise<boolean | void> | boolean | void;
+  onRejectSoumission: (idSoumission: string, raison: string) => Promise<boolean | void> | boolean | void;
+  onUpdateSoumission?: (soumission: SoumissionEnAttente) => Promise<boolean | void> | boolean | void;
+  onDeleteSoumission?: (idSoumission: string) => Promise<boolean | void> | boolean | void;
   onRefreshSoumissions?: () => void;
   role: UserRole;
   currentUser: {username: string, role: UserRole} | null;
@@ -318,34 +318,84 @@ export const OACModule: React.FC<OACModuleProps> = ({
     prevRejectedCount.current = rejectedCount;
   }, [rejectedCount, role]);
 
+  const parseFrDateMs = (dateStr?: string): number => {
+    if (!dateStr) return 0;
+    const s = String(dateStr).trim();
+    if (s.includes('/')) {
+      const [d, m, y] = s.split('/').map(Number);
+      if (d && m && y) return new Date(y, m - 1, d).getTime();
+    }
+    if (s.includes('-')) {
+      const [y, m, d] = s.split('-').map(Number);
+      if (d && m && y) return new Date(y, m - 1, d).getTime();
+    }
+    const ts = Date.parse(s);
+    return isNaN(ts) ? 0 : ts;
+  };
+
   const filteredSoumissions = useMemo(() => {
-    return soumissions.filter((s) => {
-      const matchFilter = soumissionFilter === 'Tous' ? true : s.statut === soumissionFilter;
-      const matchSearch = soumissionSearch
-        ? `${s.type} ${s.soumisPar} ${s.resume} ${s.dateSoumission}`
-            .toLowerCase()
-            .includes(soumissionSearch.toLowerCase().trim())
-        : true;
-      return matchFilter && matchSearch;
-    })
-    .sort((a, b) => {
-        const [d1, m1, y1] = a.dateSoumission.split('/').map(Number);
-        const [d2, m2, y2] = b.dateSoumission.split('/').map(Number);
-        return new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime();
-    })
-    .slice(0, 5);
+    const statusPriority: Record<string, number> = {
+      'En attente': 0,
+      'Rejeté': 1,
+      'Approuvé': 2,
+    };
+    return soumissions
+      .filter((s) => {
+        const matchFilter = soumissionFilter === 'Tous' ? true : s.statut === soumissionFilter;
+        const matchSearch = soumissionSearch
+          ? `${s.type || ''} ${s.soumisPar || ''} ${s.resume || ''} ${s.dateSoumission || ''}`
+              .toLowerCase()
+              .includes(soumissionSearch.toLowerCase().trim())
+          : true;
+        return matchFilter && matchSearch;
+      })
+      .sort((a, b) => {
+        if (soumissionFilter === 'Tous') {
+          const pA = statusPriority[a.statut] ?? 3;
+          const pB = statusPriority[b.statut] ?? 3;
+          if (pA !== pB) return pA - pB;
+        }
+        return parseFrDateMs(b.dateSoumission) - parseFrDateMs(a.dateSoumission);
+      });
   }, [soumissions, soumissionFilter, soumissionSearch]);
 
+  const existingOacIdSet = useMemo(() => new Set(oacList.map((o) => String(o.id || '').trim()).filter(Boolean)), [oacList]);
+
+  const unusedDepenseOacIds = useMemo(() => {
+    const map = new Map<string, string>();
+    depenses
+      .filter((d) => d.sousCategorie === "Achat d'œufs à couver" && d.idCommande)
+      .forEach((d) => {
+        const id = String(d.idCommande || '').trim();
+        if (id && !existingOacIdSet.has(id) && !map.has(id)) {
+          map.set(id, d.date || '');
+        }
+      });
+    return Array.from(map.entries())
+      .map(([id, date]) => ({ id, date }))
+      .sort((a, b) => parseFrDateMs(b.date) - parseFrDateMs(a.date));
+  }, [depenses, existingOacIdSet]);
+
+  const nextAutoOacId = useMemo(() => {
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    let seq = oacList.length + 1;
+    let candidate = `OAC-${yy}${mm}-${String(seq).padStart(3, '0')}`;
+    while (existingOacIdSet.has(candidate)) {
+      seq++;
+      candidate = `OAC-${yy}${mm}-${String(seq).padStart(3, '0')}`;
+    }
+    return candidate;
+  }, [oacList.length, existingOacIdSet]);
+
   const recentOacList = useMemo(() => {
-    // 1. Dépenses "Achat d'œufs à couver"
     const oacIdsFromDepenses = depenses
       .filter((d) => d.sousCategorie === "Achat d'œufs à couver" && d.idCommande)
-      .map((d) => ({ id: d.idCommande!, date: d.date }));
+      .map((d) => ({ id: String(d.idCommande!), date: d.date || '' }));
 
-    // 2. IDs de oacList (déjà existants)
-    const oacIdsFromOacList = oacList.map((o) => ({ id: o.id, date: o.date }));
+    const oacIdsFromOacList = oacList.map((o) => ({ id: String(o.id || ''), date: o.date || '' })).filter((x) => x.id);
 
-    // 3. Fusionner et garder les plus récents (unique IDs)
     const allIds = [...oacIdsFromDepenses, ...oacIdsFromOacList];
     const uniqueIdsMap = new Map<string, string>();
     allIds.forEach((item) => {
@@ -354,15 +404,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
       }
     });
 
-    // 4. Convertir en tableau et trier
     return Array.from(uniqueIdsMap.entries())
       .map(([id, date]) => ({ id, date }))
-      .sort((a, b) => {
-        const [dA, mA, yA] = a.date.split('/').map(Number);
-        const [dB, mB, yB] = b.date.split('/').map(Number);
-        return new Date(yB, mB - 1, dB).getTime() - new Date(yA, mA - 1, dA).getTime();
-      })
-      .slice(0, 5);
+      .sort((a, b) => parseFrDateMs(b.date) - parseFrDateMs(a.date))
+      .slice(0, 10);
   }, [oacList, depenses]);
 
   // Selected IDs in tables
@@ -423,6 +468,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   // Confirmation Delete Soumission Modal (Admin)
   const [deleteSoumissionConfirmOpen, setDeleteSoumissionConfirmOpen] = useState(false);
   const [deleteSoumissionTarget, setDeleteSoumissionTarget] = useState<SoumissionEnAttente | null>(null);
+  const [isSubmittingAction, setIsSubmittingAction] = useState(false);
 
   const showNotification = (text: string, ok: boolean) => {
     setMsg({ text, ok });
@@ -641,7 +687,9 @@ export const OACModule: React.FC<OACModuleProps> = ({
   // -------------------------------------------------------------
   // Save Handlers
   // -------------------------------------------------------------
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (isSubmittingAction) return;
+
     if (tabActif === 0) {
       if (!cDt || !cType || !cCar) {
         showNotification('Veuillez renseigner la date, le type et le nombre de cartons.', false);
@@ -659,25 +707,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
         showNotification('Veuillez sélectionner un fournisseur.', false);
         return;
       }
-      // ✅ v1.3.8 : Date d'incubation OBLIGATOIRE
       if (!cDateIncub) {
         showNotification('Veuillez renseigner la date d\'incubation (obligatoire).', false);
         return;
       }
 
       const cartonsNum = parseInt(cCar) || 0;
+      if (cartonsNum <= 0) {
+        showNotification('Le nombre de cartons doit être supérieur à 0.', false);
+        return;
+      }
       const cassesNum = parseInt(cCas) || 0;
-      const dateParts = cDt.split('-');
-      const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
-      // ✅ v1.3.8 : Date d'éclosion CALCULÉE = date d'incubation + 21 jours
       const eclosionDate = calculateEclosionDate(cDateIncub);
-      // Formatage de la date d'incubation au format dd/mm/yyyy pour le backend
       const incubParts = cDateIncub.split('-');
       const formattedDateIncub = incubParts.length === 3 ? `${incubParts[2]}/${incubParts[1]}/${incubParts[0]}` : cDateIncub;
-      const totalRecus = cartonsNum * 360;
-      const cubes = totalRecus - cassesNum;
 
-      // Bloquer toute modification d'une commande existante par un utilisateur non-admin
       if (selC && role !== 'admin') {
         const selOac = oacList.find((o) => o.id === selC);
         const restriction = checkOACRestriction(selOac, role, 'Commande', soumissions);
@@ -687,25 +731,20 @@ export const OACModule: React.FC<OACModuleProps> = ({
         }
       }
 
-      // ✅ ANOMALIE CORRIGÉE — TOUS les utilisateurs (administrateurs compris)
-      //    doivent passer par la validation admin. Aucun enregistrement direct.
-      //    La soumission est mise en file d'attente et un email est envoyé aux
-      //    administrateurs via GAS (MailApp natif, fonctionne en production).
-      {
-        const donnees = {
-          date: cDt,
-          type: cType,
-          race: cRace,
-          fournisseur: cFourn,
-          cartons: cartonsNum,
-          casses: cassesNum,
-          // ✅ v1.3.8 : On envoie la DATE D'INCUBATION au backend (au lieu de la date d'éclosion)
-          //   Le backend la stockera en colonne AA et calculera lui-même la date d'éclosion (col J = AA + 21j)
-          dateIncubation: formattedDateIncub,
-          eclosion: eclosionDate, // conservé pour rétrocompatibilité
-        };
-        const resume = `Commande ${cType} (${cRace}) - ${cartonsNum} cartons (${cFourn}) - Incub. ${formattedDateIncub} → Éclo. ${eclosionDate}`;
+      const donnees = {
+        date: cDt,
+        type: cType,
+        race: cRace,
+        fournisseur: cFourn,
+        cartons: cartonsNum,
+        casses: cassesNum,
+        dateIncubation: formattedDateIncub,
+        eclosion: eclosionDate,
+      };
+      const resume = `Commande ${cType} (${cRace}) - ${cartonsNum} cartons (${cFourn}) - Incub. ${formattedDateIncub} → Éclo. ${eclosionDate}`;
 
+      setIsSubmittingAction(true);
+      try {
         if (activeCorrection && activeCorrection.type === 'Commande') {
           const updated: SoumissionEnAttente = {
             ...activeCorrection,
@@ -715,10 +754,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
             donnees,
             raison: undefined,
           };
-          if (onUpdateSoumission) {
-            onUpdateSoumission(updated);
-          } else {
-            onAddSoumission(updated);
+          const ok = onUpdateSoumission ? await onUpdateSoumission(updated) : await onAddSoumission(updated);
+          if (ok === false) {
+            playAlertSound('error');
+            showNotification("Échec de l'envoi de la correction. Vérifiez la connexion et réessayez.", false);
+            return;
           }
           setActiveCorrection(null);
           playAlertSound('success');
@@ -734,23 +774,27 @@ export const OACModule: React.FC<OACModuleProps> = ({
             resume,
             donnees,
           };
-          onAddSoumission(newSoumission);
+          const ok = await onAddSoumission(newSoumission);
+          if (ok === false) {
+            playAlertSound('error');
+            showNotification("Échec de l'envoi de la commande pour validation.", false);
+            return;
+          }
           playAlertSound('success');
           sendAdminNotification('Nouvelle commande en attente', `Une nouvelle commande a été soumise par ${newSoumission.soumisPar}: ${resume}`);
           showNotification('📨 Commande transmise à la validation administrateur avec succès. Elle sera intégrée dès son approbation.', true);
         }
         razC();
         setTabActif(null);
-        return;
+      } finally {
+        setIsSubmittingAction(false);
       }
-      // ℹ️ Le code d'enregistrement direct (admin) a été supprimé : toutes les
-      //    saisies passent désormais par la validation admin ci-dessus.
+      return;
     } else if (tabActif === 1) {
       if (!mId) {
         showNotification('Veuillez sélectionner une ligne dans la liste.', false);
         return;
       }
-      // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage avant mirage
       if (!assertNotLocked(mId, 'Mirage')) {
         return;
       }
@@ -764,18 +808,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
         const cubes = existing.cubes || (existing.cartons * 360 - existing.nbCasses);
         const fertiles = Math.max(0, cubes - clairsNum);
 
-        // ✅ ANOMALIE CORRIGÉE — TOUS les utilisateurs (administrateurs compris)
-        //    doivent passer par la validation admin. Aucun enregistrement direct.
-        //    La déclaration de mirage est mise en file d'attente et un email est
-        //    envoyé aux administrateurs via GAS (MailApp natif).
-        {
-          const donnees = {
-            id: mId,
-            clairs: clairsNum,
-            fertiles,
-          };
-          const resume = `Mirage lot ${mId} : ${clairsNum} clairs, ${fertiles} fertiles`;
+        const donnees = {
+          id: mId,
+          clairs: clairsNum,
+          fertiles,
+        };
+        const resume = `Mirage lot ${mId} : ${clairsNum} clairs, ${fertiles} fertiles`;
 
+        setIsSubmittingAction(true);
+        try {
           if (activeCorrection && activeCorrection.type === 'Mirage') {
             const updated: SoumissionEnAttente = {
               ...activeCorrection,
@@ -785,10 +826,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
               donnees,
               raison: undefined,
             };
-            if (onUpdateSoumission) {
-              onUpdateSoumission(updated);
-            } else {
-              onAddSoumission(updated);
+            const ok = onUpdateSoumission ? await onUpdateSoumission(updated) : await onAddSoumission(updated);
+            if (ok === false) {
+              playAlertSound('error');
+              showNotification("Échec de l'envoi de la correction du mirage.", false);
+              return;
             }
             setActiveCorrection(null);
             playAlertSound('success');
@@ -804,24 +846,28 @@ export const OACModule: React.FC<OACModuleProps> = ({
               resume,
               donnees,
             };
-            onAddSoumission(newSoumission);
+            const ok = await onAddSoumission(newSoumission);
+            if (ok === false) {
+              playAlertSound('error');
+              showNotification("Échec de l'envoi du mirage pour validation.", false);
+              return;
+            }
             playAlertSound('success');
             sendAdminNotification('Nouveau mirage en attente', `Un nouveau mirage a été soumis par ${newSoumission.soumisPar}: ${resume}`);
             showNotification('📨 Déclaration de mirage transmise à la validation administrateur.', true);
           }
           razM();
           setTabActif(null);
-          return;
+        } finally {
+          setIsSubmittingAction(false);
         }
-        // ℹ️ Le code d'enregistrement direct (admin) a été supprimé : toutes les
-        //    saisies passent désormais par la validation admin ci-dessus.
+        return;
       }
     } else if (tabActif === 2) {
       if (!eId) {
         showNotification('Veuillez sélectionner une éclosion dans la liste.', false);
         return;
       }
-      // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage avant éclosion
       if (!assertNotLocked(eId, 'Éclosion')) {
         return;
       }
@@ -844,23 +890,20 @@ export const OACModule: React.FC<OACModuleProps> = ({
         const hanNum = parseInt(eHan) || 0;
         const morNum = parseInt(eMor) || 0;
         const bonus = Math.ceil(commNum * 0.02);
-        const pourVente = commNum - bonus;
+        const pourVente = Math.max(0, commNum - bonus);
 
-        // ✅ ANOMALIE CORRIGÉE — TOUS les utilisateurs (administrateurs compris)
-        //    doivent passer par la validation admin. Aucun enregistrement direct.
-        //    La déclaration d'éclosion est mise en file d'attente et un email est
-        //    envoyé aux administrateurs via GAS (MailApp natif).
-        {
-          const donnees = {
-            id: eId,
-            commerciaux: commNum,
-            nes: commNum,
-            handicapes: hanNum,
-            morts: morNum,
-            pourVente,
-          };
-          const resume = `Éclosion lot ${eId} : ${commNum} commerciaux, ${hanNum} handicapés, ${morNum} morts`;
+        const donnees = {
+          id: eId,
+          commerciaux: commNum,
+          nes: commNum,
+          handicapes: hanNum,
+          morts: morNum,
+          pourVente,
+        };
+        const resume = `Éclosion lot ${eId} : ${commNum} commerciaux, ${hanNum} handicapés, ${morNum} morts`;
 
+        setIsSubmittingAction(true);
+        try {
           if (activeCorrection && activeCorrection.type === 'Éclosion') {
             const updated: SoumissionEnAttente = {
               ...activeCorrection,
@@ -870,10 +913,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
               donnees,
               raison: undefined,
             };
-            if (onUpdateSoumission) {
-              onUpdateSoumission(updated);
-            } else {
-              onAddSoumission(updated);
+            const ok = onUpdateSoumission ? await onUpdateSoumission(updated) : await onAddSoumission(updated);
+            if (ok === false) {
+              playAlertSound('error');
+              showNotification("Échec de l'envoi de la correction d'éclosion.", false);
+              return;
             }
             setActiveCorrection(null);
             playAlertSound('success');
@@ -889,17 +933,22 @@ export const OACModule: React.FC<OACModuleProps> = ({
               resume,
               donnees,
             };
-            onAddSoumission(newSoumission);
+            const ok = await onAddSoumission(newSoumission);
+            if (ok === false) {
+              playAlertSound('error');
+              showNotification("Échec de l'envoi de l'éclosion pour validation.", false);
+              return;
+            }
             playAlertSound('success');
             sendAdminNotification('Nouvelle éclosion en attente', `Une nouvelle éclosion a été soumise par ${newSoumission.soumisPar}: ${resume}`);
             showNotification('📨 Déclaration d\'éclosion transmise à la validation administrateur.', true);
           }
           razE();
           setTabActif(null);
-          return;
+        } finally {
+          setIsSubmittingAction(false);
         }
-        // ℹ️ Le code d'enregistrement direct (admin) a été supprimé : toutes les
-        //    saisies passent désormais par la validation admin ci-dessus.
+        return;
       }
     }
   };
@@ -968,9 +1017,6 @@ export const OACModule: React.FC<OACModuleProps> = ({
   const handleOpenApprove = (soumission: SoumissionEnAttente) => {
     setSelectedSoumission(soumission);
     const initialData = JSON.parse(JSON.stringify(soumission.donnees || {}));
-    // ✅ v1.3.11 : S'assurer que dateIncubation est pré-rempli dans le modal de validation
-    //   - Si la soumission a dateIncubation → on la convertit en ISO (yyyy-mm-dd) pour l'input type="date"
-    //   - Sinon, on déduit dateIncubation = eclosion - 21 jours (rétrocompatibilité anciennes soumissions)
     if (!initialData.dateIncubation && initialData.eclosion) {
       const p = String(initialData.eclosion).split('/');
       if (p.length === 3) {
@@ -978,15 +1024,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
         dEclo.setDate(dEclo.getDate() - 21);
         initialData.dateIncubation = `${dEclo.getFullYear()}-${String(dEclo.getMonth() + 1).padStart(2, '0')}-${String(dEclo.getDate()).padStart(2, '0')}`;
       }
-    } else if (initialData.dateIncubation && initialData.dateIncubation.includes('/')) {
-      // Convertir dd/mm/yyyy → yyyy-mm-dd pour l'input type="date"
-      const p = initialData.dateIncubation.split('/');
+    } else if (initialData.dateIncubation && String(initialData.dateIncubation).includes('/')) {
+      const p = String(initialData.dateIncubation).split('/');
       if (p.length === 3) {
         initialData.dateIncubation = `${p[2]}-${p[1]}-${p[0]}`;
       }
     }
     setEditDonnees(initialData);
-    setApproveIdChoisi(soumission.donnees?.id || `OAC-2609-00${oacList.length + 1}`);
+    const defaultCommandeId = soumission.donnees?.id || unusedDepenseOacIds[0]?.id || nextAutoOacId;
+    setApproveIdChoisi(defaultCommandeId);
     setApproveIdError(false);
     setShowRejectFormInModal(false);
     setModalRejectRaison('');
@@ -994,8 +1040,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
   };
 
   const confirmApprove = async () => {
-    if (!selectedSoumission) return;
-    // ✅ PATCH RÈGLES DE GESTION — Vérifier le verrouillage avant approbation Mirage/Éclosion
+    if (!selectedSoumission || isSubmittingAction) return;
     if (selectedSoumission.type === 'Mirage' || selectedSoumission.type === 'Éclosion') {
       const targetId = editDonnees.id || selectedSoumission.donnees?.id;
       if (targetId && !assertNotLocked(targetId, `Approbation ${selectedSoumission.type}`)) {
@@ -1010,40 +1055,53 @@ export const OACModule: React.FC<OACModuleProps> = ({
       ? approveIdChoisi.trim()
       : (editDonnees.id || selectedSoumission.donnees?.id);
 
-    // ✅ AWAIT onApproveSoumission : le toast de succès ne s'affiche
-    //    que si l'enregistrement en base a réussi. En cas d'échec,
-    //    l'alerte est affichée par handleApproveSoumission.
-    setApproveModalOpen(false);
-    setSelectedSoumission(null);
-    setShowRejectFormInModal(false);
+    const currentSoumission = selectedSoumission;
+    setIsSubmittingAction(true);
     try {
-      await onApproveSoumission(selectedSoumission.idSoumission, finalId, editDonnees);
-      // ✅ Son 'approve' distinctif (4 tons triomphants ascendants)
+      const ok = await onApproveSoumission(currentSoumission.idSoumission, finalId, editDonnees);
+      if (ok === false) {
+        playAlertSound('error');
+        showNotification(`La validation de ${currentSoumission.type} n'a pas abouti. Vérifiez le message d'erreur.`, false);
+        return;
+      }
+      setApproveModalOpen(false);
+      setSelectedSoumission(null);
+      setShowRejectFormInModal(false);
       playAlertSound('approve');
-      showNotification(`Soumission ${selectedSoumission.type} validée et enregistrée dans la base avec succès !`, true);
+      showNotification(`Soumission ${currentSoumission.type} validée et enregistrée dans la base avec succès !`, true);
     } catch (e: any) {
       console.error('[confirmApprove] Exception:', e);
       playAlertSound('error');
       showNotification(`Erreur lors de la validation : ${e?.message || e}`, false);
+    } finally {
+      setIsSubmittingAction(false);
     }
   };
 
   const handleConfirmRejectFromModal = async () => {
-    if (!selectedSoumission) return;
+    if (!selectedSoumission || isSubmittingAction) return;
+    const currentSoumission = selectedSoumission;
     const raison = modalRejectRaison.trim() || 'Correction demandée par le superviseur';
-    setApproveModalOpen(false);
-    setSelectedSoumission(null);
-    setShowRejectFormInModal(false);
-    setModalRejectRaison('');
+    setIsSubmittingAction(true);
     try {
-      await onRejectSoumission(selectedSoumission.idSoumission, raison);
-      // ✅ Son 'reject' distinctif (buzzer descendant)
+      const ok = await onRejectSoumission(currentSoumission.idSoumission, raison);
+      if (ok === false) {
+        playAlertSound('error');
+        showNotification("Le rejet n'a pas pu être enregistré dans la base.", false);
+        return;
+      }
+      setApproveModalOpen(false);
+      setSelectedSoumission(null);
+      setShowRejectFormInModal(false);
+      setModalRejectRaison('');
       playAlertSound('reject');
       showNotification("Soumission rejetée et enregistrée dans la base. L'opérateur a reçu une alerte sonore et une demande de correction.", true);
     } catch (e: any) {
       console.error('[handleConfirmRejectFromModal] Exception:', e);
       playAlertSound('error');
       showNotification(`Erreur lors du rejet : ${e?.message || e}`, false);
+    } finally {
+      setIsSubmittingAction(false);
     }
   };
 
@@ -1059,20 +1117,27 @@ export const OACModule: React.FC<OACModuleProps> = ({
   };
 
   const confirmReject = async () => {
-    if (!rejectSoumissionId) return;
+    if (!rejectSoumissionId || isSubmittingAction) return;
     const id = rejectSoumissionId;
     const raison = rejectRaison.trim() || 'Correction demandée par le superviseur';
-    setRejectModalOpen(false);
-    setRejectSoumissionId('');
+    setIsSubmittingAction(true);
     try {
-      await onRejectSoumission(id, raison);
-      // ✅ Son 'reject' distinctif (buzzer descendant)
+      const ok = await onRejectSoumission(id, raison);
+      if (ok === false) {
+        playAlertSound('error');
+        showNotification("Le rejet n'a pas pu être enregistré dans la base.", false);
+        return;
+      }
+      setRejectModalOpen(false);
+      setRejectSoumissionId('');
       playAlertSound('reject');
       showNotification("Soumission rejetée et enregistrée dans la base. Une alerte sonore et une demande de correction ont été transmises à l'opérateur.", true);
     } catch (e: any) {
       console.error('[confirmReject] Exception:', e);
       playAlertSound('error');
       showNotification(`Erreur lors du rejet : ${e?.message || e}`, false);
+    } finally {
+      setIsSubmittingAction(false);
     }
   };
 
@@ -1081,15 +1146,37 @@ export const OACModule: React.FC<OACModuleProps> = ({
     setActiveCorrection(s);
     setMainTab('cycle');
     playAlertSound('warning');
+    const toIsoDate = (raw?: string): string => {
+      if (!raw) return '';
+      const str = String(raw).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+      if (str.includes('/')) {
+        const p = str.split('/');
+        if (p.length === 3) return `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+      }
+      return '';
+    };
     if (s.type === 'Commande') {
       setTabActif(0);
       if (s.donnees) {
-        setCDt(s.donnees.date || '');
+        const isoDate = toIsoDate(s.donnees.date);
+        if (isoDate) setCDt(isoDate);
         setCType(s.donnees.type || 'Chairs');
         setCRace(s.donnees.race || 'Ross 308');
         setCFourn(s.donnees.fournisseur || 'Pak tavuk');
         setCCar(s.donnees.cartons != null ? String(s.donnees.cartons) : '');
         setCCas(s.donnees.casses != null ? String(s.donnees.casses) : '');
+        let isoIncub = toIsoDate(s.donnees.dateIncubation);
+        if (!isoIncub && s.donnees.eclosion) {
+          const ecloIso = toIsoDate(s.donnees.eclosion);
+          if (ecloIso) {
+            const p = ecloIso.split('-').map(Number);
+            const dt = new Date(p[0], p[1] - 1, p[2]);
+            dt.setDate(dt.getDate() - 21);
+            isoIncub = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+          }
+        }
+        if (isoIncub) setCDateIncub(isoIncub);
       }
     } else if (s.type === 'Mirage') {
       setTabActif(1);
@@ -1128,25 +1215,32 @@ export const OACModule: React.FC<OACModuleProps> = ({
   };
 
   const confirmDeleteSoumission = async () => {
-    if (!deleteSoumissionTarget) return;
+    if (!deleteSoumissionTarget || isSubmittingAction) return;
     const target = deleteSoumissionTarget;
-    setDeleteSoumissionConfirmOpen(false);
-    setDeleteSoumissionTarget(null);
-    if (approveModalOpen) {
-      setApproveModalOpen(false);
-      setSelectedSoumission(null);
-    }
+    setIsSubmittingAction(true);
     try {
       if (onDeleteSoumission) {
-        await onDeleteSoumission(target.idSoumission);
+        const ok = await onDeleteSoumission(target.idSoumission);
+        if (ok === false) {
+          playAlertSound('error');
+          showNotification(`Erreur : la suppression de la soumission (${target.idSoumission}) a échoué.`, false);
+          return;
+        }
       }
-      // ✅ Son 'success' court
+      setDeleteSoumissionConfirmOpen(false);
+      setDeleteSoumissionTarget(null);
+      if (approveModalOpen) {
+        setApproveModalOpen(false);
+        setSelectedSoumission(null);
+      }
       playAlertSound('success');
       showNotification(`Soumission ${target.type} (${target.idSoumission}) supprimée de la base avec succès.`, true);
     } catch (e: any) {
       console.error('[confirmDeleteSoumission] Exception:', e);
       playAlertSound('error');
       showNotification(`Erreur lors de la suppression : ${e?.message || e}`, false);
+    } finally {
+      setIsSubmittingAction(false);
     }
   };
 
@@ -1419,9 +1513,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
                               </button>
                             </div>
                           ) : (
-                            <span className="text-[11px] text-slate-500 font-medium">
-                              Traité par {s.validPar || 'admin'} {s.dateValid ? `le ${s.dateValid}` : ''}
-                            </span>
+                            <div className="flex items-center justify-end gap-2">
+                              <span className="text-[11px] text-slate-500 font-medium">
+                                Traité par {s.validPar || 'admin'} {s.dateValid ? `le ${s.dateValid}` : ''}
+                              </span>
+                              {onDeleteSoumission && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteSoumissionClick(s)}
+                                  title="Supprimer cette soumission"
+                                  className="px-2 py-1 rounded-lg text-[11px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition cursor-pointer"
+                                >
+                                  🗑
+                                </button>
+                              )}
+                            </div>
                           )
                         ) : (
                           isRejected ? (
@@ -1676,13 +1782,13 @@ export const OACModule: React.FC<OACModuleProps> = ({
                         if (overviewFilter === 'En incubation' && item.statut !== 'En incubation' && item.statut !== 'Incubation') return false;
                       }
                       if (overviewSearch.trim()) {
-                        const s = overviewSearch.toLowerCase();
+                        const s = overviewSearch.toLowerCase().trim();
                         return (
-                          item.id.toLowerCase().includes(s) ||
-                          item.race.toLowerCase().includes(s) ||
-                          item.fournisseur.toLowerCase().includes(s) ||
-                          (item.date && item.date.includes(s)) ||
-                          (item.eclosion && item.eclosion.includes(s))
+                          String(item.id || '').toLowerCase().includes(s) ||
+                          String(item.race || '').toLowerCase().includes(s) ||
+                          String(item.fournisseur || '').toLowerCase().includes(s) ||
+                          (item.date && String(item.date).includes(s)) ||
+                          (item.eclosion && String(item.eclosion).includes(s))
                         );
                       }
                       return true;
@@ -2876,11 +2982,14 @@ export const OACModule: React.FC<OACModuleProps> = ({
                     </button>
                     <button
                       type="button"
+                      disabled={isSubmittingAction}
                       onClick={handleConfirmRejectFromModal}
-                      className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-sm flex items-center gap-1.5 cursor-pointer"
+                      className={`px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-sm flex items-center gap-1.5 ${
+                        isSubmittingAction ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                      }`}
                     >
                       <span>✕</span>
-                      <span>Confirmer le rejet et notifier</span>
+                      <span>{isSubmittingAction ? 'Enregistrement...' : 'Confirmer le rejet et notifier'}</span>
                     </button>
                   </div>
                 </div>
@@ -3091,11 +3200,14 @@ export const OACModule: React.FC<OACModuleProps> = ({
                                 type="number"
                                 min="0"
                                 value={morVal}
+                                disabled={!restriction.allowed}
                                 onChange={(e) => {
                                   const val = e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0);
                                   setEditDonnees({ ...editDonnees, morts: val });
                                 }}
-                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                                className={`w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono ${
+                                  !restriction.allowed ? 'opacity-50 cursor-not-allowed' : ''
+                                }`}
                                 placeholder=""
                               />
                             </div>
@@ -3146,13 +3258,23 @@ export const OACModule: React.FC<OACModuleProps> = ({
                             }`}
                           >
                             <option value="">-- Choisir un ID --</option>
-                            {recentOacList
-                              .map(o => (
-                                <option key={o.id} value={o.id}>
-                                  {o.id} — (Récemment créé)
-                                </option>
-                              ))
-                            }
+                            <option value={nextAutoOacId}>
+                              {nextAutoOacId} — (Nouvel ID auto-généré)
+                            </option>
+                            {unusedDepenseOacIds.map((o) => (
+                              <option key={`dep-${o.id}`} value={o.id}>
+                                {o.id} — (Dépense OAC disponible{o.date ? ` • ${o.date}` : ''})
+                              </option>
+                            ))}
+                            {oacList.length > 0 && (
+                              <optgroup label="Lots OAC existants (attention : déjà enregistrés)">
+                                {oacList.slice(0, 10).map((o) => (
+                                  <option key={`oac-${o.id}`} value={o.id}>
+                                    {o.id} — (Déjà existant • {o.date})
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
                           </select>
                           <input
                             type="text"
@@ -3165,6 +3287,11 @@ export const OACModule: React.FC<OACModuleProps> = ({
                             className="w-full sm:w-48 px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold font-mono focus:ring-2 focus:ring-emerald-500"
                           />
                         </div>
+                        {approveIdChoisi && existingOacIdSet.has(approveIdChoisi.trim()) && (
+                          <p className="text-[11px] text-amber-800 font-semibold mt-1 bg-amber-50 p-2 rounded-lg border border-amber-300">
+                            ⚠️ L'ID « {approveIdChoisi.trim()} » existe déjà dans la liste des OAC. Utilisez « {nextAutoOacId} » s'il s'agit d'un nouveau lot.
+                          </p>
+                        )}
                         {approveIdError && (
                           <p className="text-xs text-rose-600 font-semibold mt-1 bg-rose-50 p-2 rounded-lg border border-rose-200">
                             Veuillez sélectionner ou renseigner un ID.
@@ -3211,7 +3338,7 @@ export const OACModule: React.FC<OACModuleProps> = ({
                               onChange={(e) => setEditDonnees({ ...editDonnees, fournisseur: e.target.value })}
                               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
                             >
-                              {FOURNISSEURS_OAC.map((f) => (
+                              {(oacConfig.fournisseurs?.length > 0 ? oacConfig.fournisseurs : FOURNISSEURS_OAC).map((f) => (
                                 <option key={f} value={f}>{f}</option>
                               ))}
                             </select>
@@ -3342,15 +3469,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
                       <button
                         type="button"
                         onClick={confirmApprove}
-                        disabled={isBatchLocked && (sType === 'Mirage' || sType === 'Éclosion')}
+                        disabled={isSubmittingAction || (isBatchLocked && (sType === 'Mirage' || sType === 'Éclosion'))}
                         className={`px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#1E8449] to-[#27AE60] hover:from-[#186A3B] hover:to-[#229954] shadow-sm flex items-center gap-1.5 ${
-                          isBatchLocked && (sType === 'Mirage' || sType === 'Éclosion')
+                          isSubmittingAction || (isBatchLocked && (sType === 'Mirage' || sType === 'Éclosion'))
                             ? 'opacity-50 cursor-not-allowed'
                             : 'cursor-pointer'
                         }`}
                       >
                         <span>✔</span>
-                        <span>Confirmer l'approbation</span>
+                        <span>{isSubmittingAction ? 'Validation en cours...' : "Confirmer l'approbation"}</span>
                       </button>
                     </div>
                   </div>
@@ -3389,17 +3516,21 @@ export const OACModule: React.FC<OACModuleProps> = ({
             <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end gap-2.5">
               <button
                 type="button"
+                disabled={isSubmittingAction}
                 onClick={() => setRejectModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#e8eef5] text-slate-700 border border-[#c8d5e0]"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#e8eef5] text-slate-700 border border-[#c8d5e0] cursor-pointer"
               >
                 Annuler
               </button>
               <button
                 type="button"
+                disabled={isSubmittingAction}
                 onClick={confirmReject}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#1E8449] to-[#27AE60]"
+                className={`px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#1E8449] to-[#27AE60] ${
+                  isSubmittingAction ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                }`}
               >
-                Valider
+                {isSubmittingAction ? 'Enregistrement...' : 'Valider'}
               </button>
             </div>
           </div>
@@ -3437,6 +3568,51 @@ export const OACModule: React.FC<OACModuleProps> = ({
                 className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#922B21] to-[#E74C3C]"
               >
                 Confirmer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          CONFIRM DELETE SOUMISSION MODAL (Admin)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {deleteSoumissionConfirmOpen && deleteSoumissionTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl overflow-hidden border border-slate-200">
+            <div className="bg-gradient-to-r from-[#922B21] to-[#E74C3C] text-white px-6 py-3.5 flex items-center gap-2">
+              <span className="text-lg">🗑</span>
+              <h3 className="font-bold text-base">Supprimer la soumission</h3>
+            </div>
+            <div className="p-6 space-y-2">
+              <p className="text-xs sm:text-sm text-slate-800 font-semibold">
+                Voulez-vous supprimer définitivement cette soumission ({deleteSoumissionTarget.type}) ?
+              </p>
+              <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                {deleteSoumissionTarget.resume}
+              </p>
+            </div>
+            <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={isSubmittingAction}
+                onClick={() => {
+                  setDeleteSoumissionConfirmOpen(false);
+                  setDeleteSoumissionTarget(null);
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#e8eef5] text-slate-700 border border-[#c8d5e0] cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingAction}
+                onClick={confirmDeleteSoumission}
+                className={`px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#922B21] to-[#E74C3C] ${
+                  isSubmittingAction ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                }`}
+              >
+                {isSubmittingAction ? 'Suppression...' : 'Confirmer'}
               </button>
             </div>
           </div>

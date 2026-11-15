@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserRole } from '../types';
 import { api } from '../services/googleSheet';
 import { authenticateUser } from '../data/users';
+import { GuideModal } from './GuideModal';
 
 interface LoginScreenProps {
   onLogin: (user: {username: string, role: UserRole}) => void;
@@ -12,6 +13,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -132,16 +134,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
           </form>
         )}
 
-        <div className="flex justify-center w-full">
+        <div className="flex flex-col items-center gap-2 w-full">
           <button
+            type="button"
             onClick={() => alert("Veuillez contacter l'administrateur (Cheick ou Samba) pour réinitialiser votre mot de passe.")}
             className="text-xs text-slate-400 hover:underline"
           >
             Mot de passe oublié ?
           </button>
+          <button
+            type="button"
+            onClick={() => setIsGuideOpen(true)}
+            className="text-xs font-semibold text-[#1B4F72] hover:text-[#2E86C1] hover:underline flex items-center gap-1 mt-1 cursor-pointer"
+          >
+            <span>📖 Guide d&apos;utilisation (Consulter / PDF)</span>
+          </button>
         </div>
-        <p className="text-[10px] text-slate-300 mt-8">Couvoir SAMCHE — Gestion</p>
+        <p className="text-[10px] text-slate-300 mt-6">Couvoir SAMCHE — Gestion</p>
       </div>
+      <GuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
     </div>
   );
 };

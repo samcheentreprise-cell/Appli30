@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Depense, OAC } from '../types';
-import { getSourcesPaiement } from '../services/googleSheet';
+import { getSourcesPaiement, callApi } from '../services/googleSheet';
+import { JustificatifsDepense, cleJustificatif } from './JustificatifsDepense';
 
 export const CATEGORIES_SOUS_CATEGORIES: {
   categorie: string;
@@ -164,6 +165,58 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   // Notification Banner
   const [notif, setNotif] = useState<{ text: string; ok: boolean } | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  // Dépense enregistrée actuellement sélectionnée (pour ses justificatifs)
+  const depenseSelectionnee = selectedLigne !== null
+    ? depenses.find((d, idx) => (d.ligne !== undefined ? d.ligne : idx + 16) === selectedLigne)
+    : undefined;
+
+  // Nombre de justificatifs par dépense (badges du tableau)
+  const [justifCounts, setJustifCounts] = useState<Record<string, number>>({});
+  const chargerJustifCounts = async () => {
+    try {
+      const res = await callApi('depenses.justificatifsCles', {}, 'GET');
+      // ✅ CORRECTION : la réponse est enveloppée dans { success, data: { success, counts } }
+      const inner = res?.data || res;
+      if (res?.success || inner?.success) setJustifCounts(inner?.counts || res?.counts || {});
+    } catch {
+      // Le badge est facultatif : on ignore l'erreur
+    }
+  };
+  useEffect(() => {
+    chargerJustifCounts();
+  }, [depenses]);
+
+  // ─────────────────────────────────────────────────────────────────
+  // FICHIERS JUSTIFICATIFS de la dépense sélectionnée
+  // ─────────────────────────────────────────────────────────────────
+  // Quand l'utilisateur sélectionne une dépense, on charge la liste de
+  // ses justificatifs pour afficher un indicateur immédiat en haut du
+  // formulaire avec liens directs pour ouvrir chaque fichier.
+  interface JustifFichier { nom: string; type: string; url: string; auteur?: string; }
+  const [justifSelectedFiles, setJustifSelectedFiles] = useState<JustifFichier[]>([]);
+  const [justifSelectedLoading, setJustifSelectedLoading] = useState(false);
+
+  useEffect(() => {
+    if (!depenseSelectionnee) {
+      setJustifSelectedFiles([]);
+      return;
+    }
+    const cle = cleJustificatif(depenseSelectionnee);
+    if (!cle) {
+      setJustifSelectedFiles([]);
+      return;
+    }
+    setJustifSelectedLoading(true);
+    callApi('depenses.justificatifs', { cle }, 'GET')
+      .then((res) => {
+        // ✅ CORRECTION : la réponse est enveloppée dans { success, data: { success, fichiers } }
+        const inner = res?.data || res;
+        if (res?.success || inner?.success) setJustifSelectedFiles(inner?.fichiers || res?.fichiers || []);
+        else setJustifSelectedFiles([]);
+      })
+      .catch(() => setJustifSelectedFiles([]))
+      .finally(() => setJustifSelectedLoading(false));
+  }, [depenseSelectionnee, justifCounts]);
 
   const showNotif = (text: string, ok: boolean) => {
     setNotif({ text, ok });
@@ -201,16 +254,18 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   }, [oacList, depenses]);
 
   const recentOacIds = useMemo(() => {
-    return [...oacList].sort((a, b) => {
-      const [dA, mA, yA] = a.date.split('/').map(Number);
-      const [dB, mB, yB] = b.date.split('/').map(Number);
-      return new Date(yB, mB - 1, dB).getTime() - new Date(yA, mA - 1, dA).getTime();
-    }).sort((a, b) => {
-      const [dA, mA, yA] = a.date.split('/').map(Number);
-      const [dB, mB, yB] = b.date.split('/').map(Number);
-      return new Date(yB, mB - 1, dB).getTime() - new Date(yA, mA - 1, dA).getTime();
-    }).slice(0, 10);
-  }, [oacList, depenses]);
+    const parseMs = (d?: string) => {
+      if (!d) return 0;
+      const parts = String(d).split('/').map(Number);
+      if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+        return new Date(parts[2], parts[1] - 1, parts[0]).getTime();
+      }
+      return 0;
+    };
+    return [...oacList]
+      .sort((a, b) => parseMs(b.date) - parseMs(a.date))
+      .slice(0, 10);
+  }, [oacList]);
 
   const fmt = (v: number | string) => {
     if (v === '' || v === null || v === undefined) return '--';
@@ -450,6 +505,45 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     [filteredDepenses]
   );
 
+  // ─────────────────────────────────────────────────────────────────
+  // DÉPENSE "FORMULAIRE" pour les justificatifs en mode création
+  // ─────────────────────────────────────────────────────────────────
+  // Quand l'utilisateur saisit une NOUVELLE dépense (aucune ligne
+  // sélectionnée), on construit un objet Depense à partir des champs
+  // du formulaire pour pouvoir lier des justificatifs AVANT la
+  // sauvegarde. La clé de liaison est calculée depuis ces valeurs.
+  //
+  // ⚠️ La date du formulaire est au format YYYY-MM-DD (input HTML),
+  //    mais la date sauvegardée est au format DD/MM/YYYY. On convertit
+  //    ici pour que la clé corresponde à celle de la dépense sauvegardée.
+  //
+  // Conditions pour activer le panel justificatifs en mode création :
+  //   - sousCategorie renseignée
+  //   - montant renseigné et > 0
+  //   - date renseignée
+  const formDepense: Depense | null = useMemo(() => {
+    if (isRowSelected) return null; // Mode édition : on utilise depenseSelectionnee
+    if (!showForm) return null;     // Formulaire non visible
+    if (!sousCategorie || !montant || !date) return null;
+    const montantNum = parseFloat(montant);
+    if (isNaN(montantNum) || montantNum <= 0) return null;
+
+    // Conversion YYYY-MM-DD → DD/MM/YYYY (format de la dépense sauvegardée)
+    const dateParts = date.split('-');
+    const formattedDate = dateParts.length === 3
+      ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`
+      : date;
+
+    return {
+      date: formattedDate,
+      sousCategorie,
+      montant: montantNum,
+      libelle: libelle || sousCategorie,
+      categorie: categorie || '',
+      sourcePaiement: sourcePaiement || '',
+    };
+  }, [isRowSelected, showForm, date, sousCategorie, montant, libelle, categorie, sourcePaiement]);
+
   // Ouvre le formulaire vierge
   const openNewForm = () => {
     raz();
@@ -631,6 +725,82 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
               <div className="px-5 sm:px-6 py-2 bg-[#fef9e7] border-b border-[#f39c12]/30 text-[11px] text-[#7d6608] font-medium flex items-center gap-1.5">
                 <span>💡</span>
                 <span>Renseignez les champs ci-dessous puis cliquez sur <strong>Enregistrer</strong>. Les champs marqués <span className="text-[#E74C3C] font-bold">*</span> sont obligatoires.</span>
+              </div>
+            )}
+
+            {/* ✅ Indicateur justificatifs — visible immédiatement quand on sélectionne une dépense */}
+            {isRowSelected && depenseSelectionnee && (
+              <div className={`px-5 sm:px-6 py-2.5 border-b flex items-center justify-between gap-3 ${
+                justifSelectedFiles.length > 0
+                  ? 'bg-[#eafaf1] border-[#27ae60]/30'
+                  : justifSelectedLoading
+                    ? 'bg-slate-50 border-slate-200'
+                    : 'bg-[#fef5e7] border-[#f39c12]/30'
+              }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-base shrink-0">
+                    {justifSelectedLoading ? '⏳' : justifSelectedFiles.length > 0 ? '📎' : '📄'}
+                  </span>
+                  <div className="min-w-0">
+                    {justifSelectedLoading ? (
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        Vérification des justificatifs…
+                      </span>
+                    ) : justifSelectedFiles.length > 0 ? (
+                      <>
+                        <span className="text-[11px] font-bold text-[#1e8449]">
+                          {justifSelectedFiles.length} justificatif{justifSelectedFiles.length > 1 ? 's' : ''} lié{justifSelectedFiles.length > 1 ? 's' : ''}
+                        </span>
+                        <span className="text-[10px] text-slate-500 ml-2 hidden sm:inline">
+                          Cliquez sur un fichier pour l'ouvrir
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-[11px] font-bold text-[#b9770e]">
+                        Aucun justificatif lié à cette dépense
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Liens directs vers les fichiers (mode édition avec justificatifs) */}
+                {justifSelectedFiles.length > 0 && !justifSelectedLoading && (
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end shrink-0">
+                    {justifSelectedFiles.slice(0, 3).map((f, i) => {
+                      const isImg = f.type?.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.nom);
+                      const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.nom);
+                      return (
+                        <a
+                          key={f.url + i}
+                          href={f.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Ouvrir : ${f.nom}`}
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold transition border ${
+                            isPdf
+                              ? 'bg-[#c0392b]/10 text-[#c0392b] border-[#c0392b]/30 hover:bg-[#c0392b]/20'
+                              : isImg
+                                ? 'bg-[#2980b9]/10 text-[#2980b9] border-[#2980b9]/30 hover:bg-[#2980b9]/20'
+                                : 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200'
+                          }`}
+                        >
+                          <span className="text-xs">{isPdf ? '📕' : isImg ? '🖼️' : '📄'}</span>
+                          <span className="truncate max-w-[100px]">
+                            {f.nom.length > 14 ? f.nom.slice(0, 12) + '…' : f.nom}
+                          </span>
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="shrink-0">
+                            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
+                          </svg>
+                        </a>
+                      );
+                    })}
+                    {justifSelectedFiles.length > 3 && (
+                      <span className="text-[10px] text-slate-500 font-medium px-1">
+                        +{justifSelectedFiles.length - 3} autre{justifSelectedFiles.length - 3 > 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -831,6 +1001,42 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
                 </div>
               </div>
 
+              {/* Justificatifs (photos / PDF)
+                  — visible en mode ÉDITION (dépense sélectionnée)
+                  — ET en mode CRÉATION (nouvelle dépense, champs remplis) */}
+              {isRowSelected && depenseSelectionnee ? (
+                <div className="mb-4">
+                  <JustificatifsDepense depense={depenseSelectionnee} onChange={chargerJustifCounts} />
+                </div>
+              ) : formDepense ? (
+                <div className="mb-4">
+                  <JustificatifsDepense
+                    depense={formDepense}
+                    onChange={chargerJustifCounts}
+                    titre="Justificatifs (nouvelle dépense)"
+                  />
+                  {/* Avertissement : ne pas modifier les champs après ajout */}
+                  <div className="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[10px] text-amber-800 flex items-start gap-1.5">
+                    <span className="text-sm leading-none mt-0.5">⚠️</span>
+                    <span>
+                      Les justificatifs sont liés à la <b>date</b>, <b>sous-catégorie</b>,
+                      <b> montant</b> et <b>libellé</b>. Si vous modifiez un de ces champs
+                      après avoir ajouté un justificatif, la liaison sera perdue.
+                      Enregistrez la dépense telle quelle pour conserver les justificatifs.
+                    </span>
+                  </div>
+                </div>
+              ) : !isRowSelected && showForm ? (
+                <div className="mb-4 px-3 py-2.5 rounded-lg bg-slate-50 border border-dashed border-slate-300 text-[11px] text-slate-500 flex items-center gap-2">
+                  <span className="text-base">📎</span>
+                  <span>
+                    Pour ajouter des justificatifs, renseignez d'abord la{' '}
+                    <b>sous-catégorie</b> et le <b>montant</b>. Le bouton
+                    « + Ajouter » apparaîtra alors automatiquement.
+                  </span>
+                </div>
+              ) : null}
+
               {/* Action Buttons Bar */}
               <div className="flex flex-wrap items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
                 <button
@@ -923,6 +1129,32 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-slate-900">
                       {d.sousCategorie || '--'}
+                      {/* Badge justificatifs cliquable */}
+                      {(justifCounts[cleJustificatif(d)] || 0) > 0 && (
+                        <a
+                          href="#"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            loadRow(d, idx);
+                            // Le panneau justificatifs s'affichera automatiquement
+                            // en bas du formulaire après sélection de la ligne.
+                          }}
+                          title={`${justifCounts[cleJustificatif(d)]} justificatif(s) — cliquer pour voir`}
+                          className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#eaf2f8] text-[#1B4F72] text-[10px] font-bold hover:bg-[#d4e6f4] transition cursor-pointer border border-[#2E86C1]/20"
+                        >
+                          <span>📎</span>
+                          <span>{justifCounts[cleJustificatif(d)]}</span>
+                        </a>
+                      )}
+                      {(justifCounts[cleJustificatif(d)] || 0) === 0 && (
+                        <span
+                          title="Aucun justificatif"
+                          className="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[10px] font-bold border border-slate-200"
+                        >
+                          <span>📎</span>
+                          <span>0</span>
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-slate-800 truncate max-w-[240px]">
                       {d.libelle || '--'}

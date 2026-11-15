@@ -8,6 +8,13 @@ export interface SyncResult {
   timestamp?: string;
   sourceName?: string;
   code?: string;
+  isHtmlError?: boolean;
+  errorCategory?: string;
+  errorTitle?: string;
+  statusCode?: number;
+  errorDetails?: string;
+  suggestedAction?: string;
+  htmlPreview?: string;
 }
 
 // ✅ Liste des anciens URLs GAS cassés qu'il faut ignorer/migrer automatiquement.
@@ -344,15 +351,16 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       return {
         _v: 25,
         ligne: o.ligne,
-        id: o.id,
+        id: String(o.id || ''),
         date: o.dateCmd || o.date || '',
-        type: o.type,
-        race: o.race,
-        fournisseur: o.fournisseur,
+        type: String(o.type || 'Chairs'),
+        race: String(o.race || ''),
+        fournisseur: String(o.fournisseur || ''),
         cartons: o.cartons,
         recus: o.recus,
         nbCasses: o.casses ?? o.nbCasses ?? 0,
         cubes: o.cubes ?? ((o.cartons || 0) * 360 - (o.casses || 0)),
+        dateIncubation: o.dateIncubation || o.dateIncub || '',
         eclosion: o.dateEclosion || o.eclosion || o.dateEclo || '',  // ← fallback dateEclo
         clairs: o.clairs ?? null,
         fertiles: o.fertiles ?? o.cubes ?? 0,
@@ -372,23 +380,68 @@ export async function fetchGoogleSheetsData(): Promise<SyncResult> {
       };
     });
 
+    // Normalisation Clients : garantit que `label` existe toujours pour éviter les TypeError
+    const rawClients = safeArray(clientsRes, 'clients');
+    const normalizedClients = rawClients.map((c: any) => {
+      const prenom = String(c?.prenom ?? '').trim();
+      const nom = String(c?.nom ?? '').trim();
+      const label = String(c?.label ?? `${prenom} ${nom}`.trim()).trim();
+      return {
+        ...c,
+        prenom,
+        nom,
+        ville: String(c?.ville ?? ''),
+        telephone: String(c?.telephone ?? ''),
+        email: String(c?.email ?? ''),
+        label,
+      };
+    });
+
+    // Normalisation Soumissions : parse `donnees` si string JSON, normalise `type` et `statut`
+    const rawSoumissions = safeArray(soumissionsRes, 'soumissions');
+    const normalizedSoumissions = rawSoumissions.map((s: any) => {
+      let parsedDonnees = s?.donnees;
+      if (typeof parsedDonnees === 'string' && parsedDonnees.trim()) {
+        try {
+          parsedDonnees = JSON.parse(parsedDonnees);
+        } catch {
+          // conserver tel quel si non-JSON
+        }
+      }
+      const rawType = String(s?.type || '').trim();
+      const normType = /^eclosion$/i.test(rawType) ? 'Éclosion'
+        : /^mirage$/i.test(rawType) ? 'Mirage'
+        : /^commande$/i.test(rawType) ? 'Commande'
+        : rawType;
+
+      const rawStatut = String(s?.statut || '').trim();
+      const normStatut = /^approuv/i.test(rawStatut) ? 'Approuvé'
+        : /^rejet/i.test(rawStatut) ? 'Rejeté'
+        : /^en attente$/i.test(rawStatut) || !rawStatut ? 'En attente'
+        : rawStatut;
+
+      return {
+        ...s,
+        type: normType,
+        statut: normStatut,
+        donnees: parsedDonnees,
+      };
+    });
+
     // ============================================================
     //  Construction du parsedData — extraction sécurisée via safeArray()
-    //  Ancien code :
-    //    ventes: ventesRes.data?.ventes || [],
-    //  Nouveau code : tolère data null/undefined, vérifie Array.isArray,
-    //                 et cherche aussi à la racine de la réponse GAS.
     // ============================================================
     const parsedData = {
       oacList,
       ventes:            safeArray(ventesRes,        'ventes'),
       depenses:          safeArray(depensesRes,      'depenses'),
       mouvementsCaisse:  safeArray(caisseRes,        'mouvements'),
-      clients:           safeArray(clientsRes,       'clients'),
+      clients:           normalizedClients,
       factures:          safeArray(facturesRes,      'factures'),
       commandesPoussins: safeArray(cmdPoussinsRes,   'commandes', 'commandesPoussins'),
       bordereaux:        safeArray(bordereauxRes,    'bordereaux'),
-      soumissions:       safeArray(soumissionsRes,   'soumissions'),
+      soumissions:       normalizedSoumissions,
+      soumissionsOk:     soumissionsRes?.success !== false,
     };
 
     return {
@@ -483,17 +536,32 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
   }
   delete data._v;
   delete data.complet;
-  delete data.statut;
+  // Note : NE PAS supprimer `data.statut` ici — `en_attente` (soumissions.modifier),
+  // `commandes_poussins`, et `factures` ont besoin de transmettre `statut` !
 
-  // DELETE : envoyer uniquement la clé
+  // DELETE : envoyer uniquement la clé (+ identifiant utilisateur pour _checkRole)
   if (crudAction === 'delete') {
     console.log(`[DEBUG] SyncPush DELETE initiated for type: ${type}, action: ${gasAction}, item:`, item);
     const deleteData: Record<string, any> = {};
+    if (item.username) deleteData.username = item.username;
+    if (item.role) deleteData.role = item.role;
 
     // Cas spécial : commandePoussins a besoin de rowIndex + idCommande
     if (type === 'commandes_poussins') {
       if (item.rowIndex) deleteData.rowIndex = item.rowIndex;
       if (item.id || item.idCommande) deleteData.idCommande = item.id || item.idCommande;
+    }
+    // Cas spécial : soumissions (en_attente) utilisent idSoumission
+    else if (type === 'en_attente') {
+      if (item.idSoumission) deleteData.idSoumission = item.idSoumission;
+      if (item.ligne) deleteData.ligne = item.ligne;
+      if (!deleteData.idSoumission && !deleteData.ligne) {
+        return {
+          success: false,
+          message: 'Impossible de supprimer : idSoumission manquant.',
+          timestamp: new Date().toLocaleTimeString('fr-FR'),
+        };
+      }
     }
     // Cas général : ligne (pour ventes, depenses, caisse, factures, bordereaux, clients)
     else if (item.ligne) {
@@ -514,9 +582,11 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
     console.log(`[DEBUG] SyncPush DELETE sending data (action: ${gasAction}):`, deleteData);
     const result = await callApi(gasAction, deleteData, 'GET');
     console.log(`[DEBUG] SyncPush DELETE raw response:`, result);
+    const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
     return {
-      success: !!result?.success && result?.data?.succes !== false,
-      message: result?.data?.message || result?.error || 'Suppression effectuée',
+      success: ok,
+      message: result?.data?.message || result?.data?.error || result?.message || result?.error || (ok ? 'Suppression effectuée' : 'Suppression échouée'),
+      code: result?.data?.code || result?.code || '',
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     };
   }
@@ -525,7 +595,8 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
   const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
-    message: result?.data?.message || result?.error || (ok ? 'Écriture OK' : 'Écriture échouée'),
+    message: result?.data?.message || result?.data?.error || result?.message || result?.error || (ok ? 'Écriture OK' : 'Écriture échouée'),
+    code: result?.data?.code || result?.code || '',
     timestamp: new Date().toLocaleTimeString('fr-FR'),
   };
 }
@@ -596,7 +667,8 @@ async function _oacSupprimer(item: any): Promise<SyncResult> {
   const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
-    message: result?.data?.message || result?.error || (ok ? 'OAC supprimée' : 'Échec suppression'),
+    message: result?.data?.message || result?.data?.error || result?.error || (ok ? 'OAC supprimée' : 'Échec suppression'),
+    code: result?.data?.code || result?.code || '',
     timestamp: new Date().toLocaleTimeString('fr-FR'),
   };
 }
@@ -726,16 +798,25 @@ async function _oacCommander(item: any): Promise<SyncResult> {
   //    Si ni `item.id` ni `item.idCommande` ne sont renseignés, on génère
   //    un ID temporaire côté frontend (le GAS en génèrera un définitif
   //    si on lui envoie une chaîne vide, mais autant être défensif).
+  const toFrDate = (raw: string): string => {
+    const s = (raw || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-');
+      return `${d}/${m}/${y}`;
+    }
+    return s;
+  };
   const _rawId = (item.id || item.idCommande || '').toString().trim();
   const data: Record<string, any> = {
     idCommande: _rawId,
-    date: item.date || '',
+    date: toFrDate(item.date || ''),
     type: item.type || 'Chairs',
     race: item.race || 'Ross 308',
     fournisseur: item.fournisseur || '',
     cartons: item.cartons || 0,
     casses: item.nbCasses || 0,
-    eclosion: item.eclosion || item.dateEclosion || '',
+    dateIncubation: toFrDate(item.dateIncubation || ''),
+    eclosion: toFrDate(item.eclosion || item.dateEclosion || ''),
     incubés: item.cubes || 0,
     username: item.username || '',
     role: item.role || '',
@@ -811,7 +892,8 @@ async function _oacMirer(item: any): Promise<SyncResult> {
   const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
-    message: result?.data?.message || result?.error || (ok ? 'Mirage enregistré' : 'Échec mirage'),
+    message: result?.data?.message || result?.data?.error || result?.error || (ok ? 'Mirage enregistré' : 'Échec mirage'),
+    code: result?.data?.code || result?.code || '',
     timestamp: new Date().toLocaleTimeString('fr-FR'),
   };
 }
@@ -855,7 +937,8 @@ async function _oacEclore(item: any): Promise<SyncResult> {
   const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
   return {
     success: ok,
-    message: result?.data?.message || result?.error || (ok ? 'Éclosion enregistrée' : 'Échec éclosion'),
+    message: result?.data?.message || result?.data?.error || result?.error || (ok ? 'Éclosion enregistrée' : 'Échec éclosion'),
+    code: result?.data?.code || result?.code || '',
     timestamp: new Date().toLocaleTimeString('fr-FR'),
   };
 }

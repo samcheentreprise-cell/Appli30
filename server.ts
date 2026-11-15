@@ -48,11 +48,11 @@ const app = express();
 const port = Number(process.env.PORT) || 3000;
 console.log(`[startup] Server configured on port ${port}`);
 
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
 
 // Configuration Google Apps Script
 const SHEET_URL = process.env.VITE_GSHEET_WEBAPP_URL
-  || 'https://script.google.com/macros/s/AKfycbxhey_NEIaQt60HykMj1MSBtcZP5f-sXIBuBL0iEecZFn28dgct1ZLr4D1ejYv62319/exec';
+  || 'https://script.google.com/macros/s/AKfycbyLDQt8owxZawRMcjppqQ70_9vHg-70Ei-CVSO2K--x_2bmiIY_GX2LhHcc2ADE07YB/exec';
 const SHEET_TOKEN = process.env.VITE_GSHEET_API_TOKEN || 'samche_2023_1972KlaBgni2';
 
 // ============================================================
@@ -193,15 +193,45 @@ app.post('/api/gas', async (req, res) => {
     const token     = (typeof _gas_token === 'string' && _gas_token.trim()) ? _gas_token.trim() : SHEET_TOKEN;
     const params = new URLSearchParams({ action, token });
     const url = `${targetUrl}?${params.toString()}`;
-    const response = await axios.post(url, JSON.stringify({ data: data || {} }), {
+
+    // ✅ Détecter si c'est un upload de justificatif (gros payload base64)
+    const payloadSize = JSON.stringify({ data: data || {} }).length;
+    const isJustifUpload = action.endsWith('.joindreJustificatif');
+    const timeout = isJustifUpload ? 120000 : 60000; // 2 min pour justificatifs, 1 min sinon
+
+    console.log(`[GAS POST] action=${action} payload=${(payloadSize / 1024).toFixed(1)}Ko timeout=${timeout / 1000}s`);
+
+    const bodyStr = JSON.stringify({ data: data || {} });
+    const response = await axios.post(url, bodyStr, {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       maxRedirects: 5,
-      timeout: 30000,
+      timeout: timeout,
+      maxContentLength: Infinity,    // réponse de n'importe quelle taille
+      maxBodyLength: Infinity,       // body de requête de n'importe quelle taille
     });
     res.json(response.data);
   } catch (error: any) {
-    console.error('[GAS PROXY POST ERROR]', error?.response?.status, error?.message);
-    res.status(502).json({ success: false, error: error?.message || 'Erreur proxy GAS (POST)' });
+    console.error('[GAS PROXY POST ERROR]', {
+      action,
+      status: error?.response?.status,
+      message: error?.message,
+      code: error?.code,
+      gasResponse: typeof error?.response?.data === 'string'
+        ? error.response.data.slice(0, 500)
+        : JSON.stringify(error?.response?.data || {}).slice(0, 500),
+    });
+    // Transmettre le message d'erreur GAS au frontend de façon exploitable
+    const errMsg = error?.response?.data
+      ? (typeof error.response.data === 'string'
+          ? error.response.data.slice(0, 300)
+          : (error.response.data.message || error.response.data.error || JSON.stringify(error.response.data).slice(0, 300)))
+      : error?.message || 'Erreur proxy GAS (POST)';
+    res.status(502).json({
+      success: false,
+      message: errMsg,
+      error: errMsg,
+      code: error?.code || 'PROXY_ERROR',
+    });
   }
 });
 
@@ -284,6 +314,45 @@ app.all('/api/proxy', async (req, res) => {
         : error?.message || 'Erreur inconnue',
     });
   }
+});
+
+// ============================================================
+// Guide d'utilisation PDF — Route directe garantie (dev & prod)
+// ============================================================
+app.get(['/api/guide-pdf', '/Guide_Utilisation_Couvoir_SAMCHE.pdf'], (req, res) => {
+  const candidates = [
+    path.resolve(__dirname, 'docs', 'Guide_Utilisation_Couvoir_SAMCHE.pdf'),
+    path.resolve(__dirname, 'public', 'Guide_Utilisation_Couvoir_SAMCHE.pdf'),
+    path.resolve(__dirname, 'dist', 'Guide_Utilisation_Couvoir_SAMCHE.pdf'),
+  ];
+  const pdfPath = candidates.find((p) => fs.existsSync(p));
+  if (!pdfPath) {
+    return res.status(404).json({ success: false, error: 'Guide PDF introuvable sur le serveur.' });
+  }
+  const forceDownload = req.query.download === '1' || req.query.download === 'true';
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader(
+    'Content-Disposition',
+    `${forceDownload ? 'attachment' : 'inline'}; filename="Guide_Utilisation_Couvoir_SAMCHE.pdf"`
+  );
+  return res.sendFile(pdfPath);
+});
+
+app.get(['/api/guide-html', '/guide-samche.html'], (_req, res) => {
+  const candidates = [
+    path.resolve(__dirname, 'docs', 'guide-samche.html'),
+    path.resolve(__dirname, 'public', 'guide-samche.html'),
+    path.resolve(__dirname, 'dist', 'guide-samche.html'),
+  ];
+  const htmlPath = candidates.find((p) => fs.existsSync(p));
+  if (!htmlPath) {
+    return res.status(404).send('<h1>Guide HTML introuvable</h1>');
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  return res.sendFile(htmlPath);
 });
 
 // ============================================================

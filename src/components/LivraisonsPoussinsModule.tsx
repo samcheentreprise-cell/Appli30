@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { CommandePoussin, OAC, Client, Bordereau, UserRole } from '../types';
+import { callApi } from '../services/googleSheet';
 import { 
   Truck, 
   CheckCircle2, 
@@ -154,34 +155,64 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
         fournisseur: string;
         attendus: number;
         isEnCours: boolean;
+        isCloture: boolean;
       }
     > = {};
 
     const todayMs = new Date().setHours(0, 0, 0, 0);
 
-    // From OAC batches
+    // Helper pour normaliser la date (gère Date object, DD/MM/YYYY, ISO, etc.)
+    const normalizeDate = (raw: any): { key: string; obj: Date | null; formatted: string } => {
+      if (!raw) return { key: '', obj: null, formatted: '' };
+      // Si c'est un objet Date
+      if (raw instanceof Date && !isNaN(raw.getTime())) {
+        const d = raw;
+        const key = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        const formatted = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        return { key, obj: d, formatted };
+      }
+      const str = String(raw).trim();
+      // Essayer de parser DD/MM/YYYY
+      const d = parseFrDate(str);
+      if (d) {
+        const key = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        const formatted = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        return { key, obj: d, formatted };
+      }
+      // Si ça ressemble à "Fri Nov 06 2026...", essayer new Date()
+      const fallback = new Date(str);
+      if (!isNaN(fallback.getTime())) {
+        const key = `${String(fallback.getDate()).padStart(2, '0')}/${String(fallback.getMonth() + 1).padStart(2, '0')}/${fallback.getFullYear()}`;
+        const formatted = fallback.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        return { key, obj: fallback, formatted };
+      }
+      return { key: str, obj: null, formatted: str };
+    };
+
+    // Helper pour extraire le mot-clé type (chair/pondeuse)
+    const typeKeyword = (t: string): string => {
+      const lower = (t || '').toLowerCase();
+      if (lower.includes('chair')) return 'chairs';
+      if (lower.includes('pondeuse') || lower.includes('pondeur')) return 'pondeuse';
+      if (lower.includes('oeuf')) return 'oeuf';
+      return lower.split(/[ (]/)[0] || 'chairs';
+    };
+
+    // 1) From OAC batches
     oacList.forEach((oac) => {
       if (!oac.eclosion) return;
-      const dateKey = oac.eclosion.trim();
+      const { key: dateKey, obj: dObj, formatted: dateFormatee } = normalizeDate(oac.eclosion);
+      if (!dateKey) return;
       const type = (oac.type || oac.race || 'Chairs').trim();
       const race = (oac.race || '').trim();
-      const dObj = parseFrDate(dateKey);
-      const dateFormatee = dObj
-        ? dObj.toLocaleDateString('fr-FR', {
-            weekday: 'short',
-            day: 'numeric',
-            month: 'short',
-            year: 'numeric',
-          })
-        : dateKey;
-
-      const key = oac.id ? `${dateKey}___${oac.id}` : `${dateKey}___${type.toLowerCase()}`;
+      // ✅ Clé = date + mot-clé type (pas d'ID OAC → évite les doublons)
+      const tk = typeKeyword(type);
+      const key = `${dateKey}___${tk}`;
       const prevQty = oac.attendus || (oac.fertiles ? Math.round(oac.fertiles * 0.8) : Math.round((oac.recus || (oac.cartons || 0) * 360) * 0.75));
-
-      // A lot is "En cours" if OAC is not completed or hatch date is upcoming/today
+      const isCloture = dObj ? dObj.getTime() < todayMs : false;
       const isEnCours = !oac.complet || (dObj ? dObj.getTime() >= todayMs - 86400000 * 3 : true);
 
-      if (!map[key]) {
+      if (!map[key] || map[key].attendus < prevQty) {
         map[key] = {
           id: key,
           date: dateKey,
@@ -193,30 +224,22 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
           fournisseur: oac.fournisseur || '',
           attendus: prevQty,
           isEnCours,
+          isCloture,
         };
       }
     });
 
-    // From orders if no OAC
+    // 2) From orders (seulement si pas déjà un lot OAC pour cette date+type)
     commandes.forEach((cmd) => {
       if (!cmd.dateEclosion) return;
-      const dateKey = cmd.dateEclosion.trim();
-      const type = (cmd.typeProduit || 'Chairs').trim();
-      const key = `${dateKey}___${type.toLowerCase()}`;
+      const { key: dateKey, obj: dObj, formatted: dateFormatee } = normalizeDate(cmd.dateEclosion);
+      if (!dateKey) return;
+      const type = (cmd.typeProduit || cmd.type || 'Chairs').trim();
+      const tk = typeKeyword(type);
+      const key = `${dateKey}___${tk}`;
+      const isCloture = dObj ? dObj.getTime() < todayMs : false;
 
       if (!map[key]) {
-        const dObj = parseFrDate(dateKey);
-        const dateFormatee = dObj
-          ? dObj.toLocaleDateString('fr-FR', {
-              weekday: 'short',
-              day: 'numeric',
-              month: 'short',
-              year: 'numeric',
-            })
-          : dateKey;
-
-        const isEnCours = dObj ? dObj.getTime() >= todayMs - 86400000 * 3 : true;
-
         map[key] = {
           id: key,
           date: dateKey,
@@ -227,18 +250,26 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
           lotId: '',
           fournisseur: '',
           attendus: 0,
-          isEnCours,
+          isEnCours: !isCloture,
+          isCloture,
         };
       }
     });
 
+    // ✅ Trier : dates futures en premier (la plus proche d'aujourd'hui en haut),
+    //    puis dates passées (la plus récente en haut)
     return Object.values(map).sort((a, b) => {
-      const todayMs = new Date().setHours(0, 0, 0, 0);
-      const ta = a.dateObj ? Math.abs(a.dateObj.getTime() - todayMs) : Infinity;
-      const tb = b.dateObj ? Math.abs(b.dateObj.getTime() - todayMs) : Infinity;
-      
-      if (ta !== tb) return ta - tb;
-      return a.type.localeCompare(b.type);
+      const ta = a.dateObj ? a.dateObj.getTime() : Infinity;
+      const tb = b.dateObj ? b.dateObj.getTime() : Infinity;
+      const aFuture = ta >= todayMs;
+      const bFuture = tb >= todayMs;
+      // Les futures d'abord
+      if (aFuture && !bFuture) return -1;
+      if (!aFuture && bFuture) return 1;
+      // Parmi les futures : la plus proche d'aujourd'hui en haut
+      if (aFuture && bFuture) return ta - tb;
+      // Parmi les passées : la plus récente en haut
+      return tb - ta;
     });
   }, [oacList, commandes]);
 
@@ -274,6 +305,46 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
     }
   });
 
+  // ✅ v1.4.2 : Au montage, charger les livraisons depuis le Google Sheet
+  //    et fusionner avec les données locales (le sheet fait foi en cas de conflit)
+  useEffect(() => {
+    const loadFromSheet = async () => {
+      try {
+        const res = await callApi('commandePoussins.lister', {}, 'GET');
+        const inner = res?.data || res;
+        const commandes = inner?.commandes || [];
+        if (commandes.length === 0) return;
+
+        const sheetRecords: Record<string, LocalDeliveryData> = {};
+        for (const c of commandes) {
+          if (c.quantiteFournie || c.statutLivraison || c.receptionnaire || c.dateLivraison) {
+            sheetRecords[c.id] = {
+              quantiteFournie: c.quantiteFournie || 0,
+              statutLivraison: c.statutLivraison || 'En attente',
+              receptionnaire: c.receptionnaire || '',
+              heureLivraison: c.heureLivraison || '',
+              nbCartons: c.nbCartons || 0,
+              notesLivraison: c.notesLivraison || '',
+              clientEmail: c.email || '',
+              dateSignature: c.dateSignature || '',
+              isModified: false,
+            };
+          }
+        }
+
+        // Fusion : les données du sheet écrasent les données locales
+        setDeliveryRecords((prev) => {
+          const merged = { ...prev, ...sheetRecords };
+          localStorage.setItem('samche_livraisons_poussins', JSON.stringify(merged));
+          return merged;
+        });
+      } catch (err) {
+        console.error('[Livraisons] Erreur chargement sheet:', err);
+      }
+    };
+    loadFromSheet();
+  }, []);
+
   // Visa Couvoir Signature (stored globally for official logs)
   const [visaCouvoirSignature, setVisaCouvoirSignature] = useState<string>(() => {
     try {
@@ -295,14 +366,31 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
     return commandes.filter((c) => {
       if (c.statut === 'Annulée') return false;
 
-      // Strict match on hatch date
+      // Match on hatch date (both normalized to DD/MM/YYYY)
       const cmdDateNorm = normalizeDateKey(c.dateEclosion);
       if (cmdDateNorm !== lotDateNorm) return false;
 
-      // Strict match on type / race if specified
-      const cmdType = (c.typeProduit || '').trim().toLowerCase();
+      // ✅ v1.4.2 : type/race matching permissif
+      //    Le lot peut avoir type="CHAIRS (ROSS 308)" et la commande typeProduit="Poussin chairs 1 jour"
+      //    On extrait le mot-clé principal (chairs/pondeuse) et on compare
+      const cmdType = (c.typeProduit || c.type || '').trim().toLowerCase();
       if (lotType && cmdType) {
-        const match = cmdType === lotType || 
+        // Extraire le mot-clé principal du type de lot
+        const lotKeyword = lotType.includes('chair') ? 'chair'
+          : lotType.includes('pondeuse') || lotType.includes('pondeur') ? 'pondeuse'
+          : lotType.includes('oeuf') ? 'oeuf'
+          : lotType.split(/[ (]/)[0]; // premier mot avant espace ou parenthèse
+
+        const cmdKeyword = cmdType.includes('chair') ? 'chair'
+          : cmdType.includes('pondeuse') || cmdType.includes('pondeur') ? 'pondeuse'
+          : cmdType.includes('oeuf') ? 'oeuf'
+          : cmdType.split(/[ (]/)[0];
+
+        // Match si les mots-clés correspondent OU si l'un inclut l'autre
+        const match = lotKeyword === cmdKeyword ||
+                      cmdType.includes(lotKeyword) ||
+                      lotType.includes(cmdKeyword) ||
+                      cmdType === lotType ||
                       (lotRace && (cmdType.includes(lotRace) || lotRace.includes(cmdType)));
         if (!match) return false;
       }
@@ -610,6 +698,19 @@ export const LivraisonsPoussinsModule: React.FC<LivraisonsPoussinsModuleProps> =
 
       const next = { ...prev, [idCommande]: updated };
       localStorage.setItem('samche_livraisons_poussins', JSON.stringify(next));
+
+      // ✅ v1.4.2 : sauvegarder aussi dans le Google Sheet
+      callApi('livraisons.enregistrer', {
+        id: idCommande,
+        quantiteFournie: updated.quantiteFournie,
+        statutLivraison: updated.statutLivraison,
+        receptionnaire: updated.receptionnaire,
+        heureLivraison: updated.heureLivraison,
+        nbCartons: updated.nbCartons,
+        notesLivraison: updated.notesLivraison,
+        dateLivraison: new Date().toLocaleDateString('fr-FR'),
+      }, 'POST').catch(() => {});
+
       return next;
     });
   };
@@ -1306,7 +1407,7 @@ Bamako, Mali`;
               >
                 {hatchLots.map((lot) => (
                   <option key={lot.id} value={lot.id}>
-                    {lot.isEnCours ? '🟡 ' : '⚪ '} {lot.dateFormatee} — {lot.type} ({lot.attendus.toLocaleString('fr-FR')} prévus)
+                    {lot.isCloture ? '🔴 Clôturé — ' : lot.isEnCours ? '🟡 ' : '⚪ '}{lot.dateFormatee} — {lot.type} ({lot.attendus.toLocaleString('fr-FR')} prévus)
                   </option>
                 ))}
               </select>
