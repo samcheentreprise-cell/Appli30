@@ -247,7 +247,7 @@ app.post('/api/send-email', async (req, res) => {
   // Use provided admin emails or fallback
   const recipients = (adminEmails && Array.isArray(adminEmails) && adminEmails.length > 0)
     ? adminEmails.join(',')
-    : 'couvoirsamche@gmail.com';
+    : 'ckamisso@gmail.com,keitasamba@yahoo.fr';
 
   console.log(`[Email] Sending notification to: ${recipients}, from: ${process.env.EMAIL_USER || 'couvoirsamche@gmail.com'}, subject: ${subject}`);
   console.log(`[Email] Content: ${text}`);

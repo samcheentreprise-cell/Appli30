@@ -644,6 +644,51 @@ export default function App() {
       )
     );
     console.log('[Approuver] ✅ Soumission marquée « Approuvée » dans Google Sheets');
+
+    // ============================================================
+    // ÉTAPE 3 — Envoyer l'email de notification de validation
+    //           (non-bloquant : un échec email n'annule pas la validation)
+    // ============================================================
+    try {
+      const targetLotId = soumType === 'Commande' ? (newOrderForList?.id || idChoisi) : (d.id || target.donnees?.id || '');
+      let notifTitle = `Validation ${soumType} confirmée (${targetLotId})`;
+      let notifMessage = `La soumission ${soumType} (${idSoumission}) soumise par ${target.soumisPar} a été validée par ${validPar} le ${todayStr}.\n\nRésumé : ${updatedResume}`;
+
+      if (soumType === 'Mirage') {
+        const lotInfo = oacList.find((x) => x.id === targetLotId);
+        const cubes = lotInfo?.cubes || ((lotInfo?.cartons || 0) * 360 - (lotInfo?.nbCasses || 0)) || 0;
+        const clairsNum = Number(d.clairs) || 0;
+        const fertilesNum = Math.max(0, cubes - clairsNum);
+        const tauxFert = cubes > 0 ? ((fertilesNum / cubes) * 100).toFixed(1) : '0.0';
+        notifTitle = `Validation de mirage confirmée (Lot ${targetLotId})`;
+        notifMessage =
+          `Le mirage du lot ${targetLotId} a été validé et enregistré dans la base par ${validPar} le ${todayStr}.\n\n` +
+          `• Soumis par : ${target.soumisPar}\n` +
+          `• Race / Type : ${lotInfo?.race || ''} (${lotInfo?.type || ''})\n` +
+          `• Fournisseur : ${lotInfo?.fournisseur || 'N/A'}\n` +
+          `• Œufs incubés : ${cubes}\n` +
+          `• Œufs clairs : ${clairsNum}\n` +
+          `• Œufs fertiles : ${fertilesNum} (${tauxFert}%)\n` +
+          `• Éclosion prévue : ${lotInfo?.eclosion || 'N/A'}`;
+      }
+
+      const notifType = soumType === 'Mirage' ? 'Mirage' : soumType === 'Éclosion' ? 'Éclosion' : 'Commande';
+      const notifRes = await addAdminNotification(
+        notifType,
+        notifTitle,
+        notifMessage,
+        validPar,
+        (currentUser?.role || 'admin') as UserRole,
+        idSoumission,
+        targetLotId
+      );
+      if (!notifRes.success) {
+        console.warn('[Approuver] ⚠ Validation enregistrée mais email de notification non envoyé:', notifRes.message);
+      }
+    } catch (emailErr) {
+      console.warn('[Approuver] ⚠ Exception lors de l\'envoi de l\'email de notification:', emailErr);
+    }
+
     return true;
   };
 
@@ -724,6 +769,25 @@ export default function App() {
       return false;
     }
     console.log('[handleRejectSoumission] ✅ Soumission marquée « Rejeté » dans Google Sheets:', idSoumission);
+
+    if (previous) {
+      try {
+        const rejType = previous.type === 'Mirage' ? 'Mirage' : previous.type === 'Éclosion' ? 'Éclosion' : 'Commande';
+        const rejLotId = previous.donnees?.id || '';
+        await addAdminNotification(
+          rejType,
+          `${previous.type} rejeté — correction demandée${rejLotId ? ` (${rejLotId})` : ''}`,
+          `La soumission ${previous.type} (${idSoumission}) de ${previous.soumisPar} a été rejetée par ${validPar} le ${todayStr}.\nMotif : ${raison}\nRésumé : ${previous.resume}`,
+          validPar,
+          (currentUser?.role || 'admin') as UserRole,
+          idSoumission,
+          rejLotId
+        );
+      } catch (emailErr) {
+        console.warn('[handleRejectSoumission] ⚠ Exception envoi email:', emailErr);
+      }
+    }
+
     return true;
   };
 

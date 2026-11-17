@@ -8,11 +8,14 @@
     #printable-facture-doc,
     #printable-facture-doc *,
     #bon-livraison-print,
-    #bon-livraison-print * {
+    #bon-livraison-print *,
+    #incubation-planner-print,
+    #incubation-planner-print * {
       visibility: visible !important;
     }
     #printable-facture-doc,
-    #bon-livraison-print {
+    #bon-livraison-print,
+    #incubation-planner-print {
       position: absolute !important;
       left: 0 !important;
       top: 0 !important;

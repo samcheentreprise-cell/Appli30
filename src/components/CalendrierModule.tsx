@@ -1,8 +1,11 @@
 import React, { useState, useMemo } from 'react';
-import { OAC } from '../types';
+import { CalendarDays, CalendarRange } from 'lucide-react';
+import { OAC, SoumissionEnAttente } from '../types';
+import { IncubationPlanner, ActiveLotAnchor } from './IncubationPlanner';
 
 interface CalendrierModuleProps {
   oacList: OAC[];
+  soumissions?: SoumissionEnAttente[];
   onNavigate?: (tab: any) => void;
   onClose?: () => void;
 }
@@ -12,6 +15,7 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
   onNavigate,
   onClose,
 }) => {
+  const [activeVolet, setActiveVolet] = useState<'echeances' | 'planification'>('echeances');
   const [filter, setFilter] = useState<'tous' | 'Incubation' | 'Miré' | 'En éclosion' | 'Éclos'>('tous');
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -170,6 +174,9 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
 
       return {
         ...lot,
+        dIncub,
+        dMirage,
+        dEclo,
         dateIncubStr,
         dateMirageStr,
         dateEcloStr,
@@ -187,6 +194,22 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
       };
     });
   }, [oacList, today]);
+
+  const activeAnchors = useMemo<ActiveLotAnchor[]>(() => {
+    return enrichedLots
+      .filter((l) => l.statut !== 'Éclos')
+      .map((l) => ({
+        id: l.id,
+        fournisseur: l.fournisseur || 'Couvoir',
+        race: l.race || 'Souche standard',
+        type: l.type || 'Chair',
+        cartons: Number(l.cartons) || (l.recus ? Math.max(1, Math.round(Number(l.recus) / 360)) : 0),
+        dateIncub: l.dIncub,
+        dateMirage: l.dMirage,
+        dateEclo: l.dEclo,
+        statut: l.statut,
+      }));
+  }, [enrichedLots]);
 
   // KPIs
   const kpis = useMemo(() => {
@@ -262,46 +285,89 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
   }, [enrichedLots, filter, searchTerm]);
 
   return (
-    <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-200 space-y-6 animate-fade-in font-['Inter',sans-serif]">
+    <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-200 space-y-6 animate-fade-in">
       {/* ══════════════════════════════════════════════════════════════════════════
-          TOP HEADER
+          TOP HEADER + VOLET SWITCHER
          ══════════════════════════════════════════════════════════════════════════ */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-5">
-        <div className="flex items-center gap-3.5">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-400 text-white flex items-center justify-center text-2xl shadow-md">
-            📅
+      <div className="space-y-4 border-b border-slate-100 pb-5 print:hidden">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-400 text-white flex items-center justify-center text-2xl shadow-md">
+              📅
+            </div>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">
+                Calendrier Opérationnel des Échéances
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-500 font-medium">
+                Suivi des lots en cours (J+18 / J+21) &amp; programmation des futures mises en incubation et commandes d&apos;œufs.
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">
-              Calendrier Opérationnel des Échéances
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-medium">
-              Suivi chronologique des lots OAC : Mirage (J+18) & Éclosion (J+21) avec alertes actives.
-            </p>
+
+          <div className="flex items-center gap-2">
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate('oac')}
+                className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+              >
+                <span>🥚 Gérer les lots OAC</span>
+                <span>❯</span>
+              </button>
+            )}
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                ✕ Fermer
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {onNavigate && (
-            <button
-              onClick={() => onNavigate('oac')}
-              className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
-            >
-              <span>🥚 Gérer les lots OAC</span>
-              <span>❯</span>
-            </button>
-          )}
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2 rounded-xl text-xs font-bold transition"
-            >
-              ✕ Fermer
-            </button>
-          )}
+        {/* Sélecteur de volet */}
+        <div className="inline-flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+          <button
+            type="button"
+            onClick={() => setActiveVolet('echeances')}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+              activeVolet === 'echeances'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <CalendarDays className="w-3.5 h-3.5" />
+            <span>Suivi des Échéances</span>
+            <span className="text-[11px] font-extrabold text-slate-500 tabular-nums">
+              ({kpis.lotsActifs} actif{kpis.lotsActifs > 1 ? 's' : ''})
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveVolet('planification')}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+              activeVolet === 'planification'
+                ? 'bg-white text-amber-800 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <CalendarRange className="w-3.5 h-3.5" />
+            <span>Planification de mise en incubation</span>
+          </button>
         </div>
       </div>
 
+      {activeVolet === 'planification' ? (
+        <IncubationPlanner
+          activeAnchors={activeAnchors}
+          allLots={oacList}
+          today={today}
+          onNavigate={onNavigate}
+        />
+      ) : (
+      <>
       {/* ══════════════════════════════════════════════════════════════════════════
           BANDEAU INFORMATIF : CYCLE D'INCUBATION & RÈGLE DU MIRAGE (J+18)
          ══════════════════════════════════════════════════════════════════════════ */}
@@ -652,6 +718,8 @@ export const CalendrierModule: React.FC<CalendrierModuleProps> = ({
           <strong className="text-slate-800">{formatFrDate(today)}</strong>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 };

@@ -173,13 +173,13 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
 
   // Ajouter un email à la liste locale (sera sauvegardé sur « Enregistrer »)
   const handleAddEmail = () => {
-    const e = newEmail.trim().toLowerCase();
+    const e = newEmail.replace(/^[;,\s]+|[;,\s]+$/g, '').trim().toLowerCase();
     if (!e) {
       setEmailsMsg({ type: 'error', text: 'Veuillez saisir une adresse email.' });
       return;
     }
-    if (!e.includes('@') || e.lastIndexOf('.') < e.indexOf('@')) {
-      setEmailsMsg({ type: 'error', text: 'Adresse email invalide.' });
+    if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e)) {
+      setEmailsMsg({ type: 'error', text: 'Adresse email invalide (retirez les points-virgules ou espaces).' });
       return;
     }
     if (emailList.includes(e)) {
@@ -610,8 +610,8 @@ export const ParametresModule: React.FC<ParametresModuleProps> = ({
           </div>
 
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            ℹ️ Astuce : si aucun email n'est configuré, le serveur utilise l'adresse par défaut
-            <code className="bg-slate-100 px-1 py-0.5 rounded ml-1 font-mono text-[10px]">couvoirsamche@gmail.com</code>.
+            ℹ️ Astuce : par défaut, les notifications sont envoyées à
+            <code className="bg-slate-100 px-1 py-0.5 rounded ml-1 font-mono text-[10px]">ckamisso@gmail.com, keitasamba@yahoo.fr</code>.
             Les changements sont effectifs immédiatement après « Enregistrer ».
           </p>
         </section>

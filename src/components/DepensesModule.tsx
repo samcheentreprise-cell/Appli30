@@ -223,17 +223,23 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     setTimeout(() => setNotif(null), 5000);
   };
 
-  // ─────────────────────────────────────────────────────────────────
-  // FORMULES — AUCUNE MODIFICATION
-  // ─────────────────────────────────────────────────────────────────
-  const isIdComRequired = useMemo(() => {
-    if (!sousCategorie) return false;
-    const lower = sousCategorie.toLowerCase();
-    // ✅ Ajout explicite de "achat d'œufs à couver"
+  const isAchatOacSubCat = (subCat: string): boolean => {
+    const lower = (subCat || '').toLowerCase().trim();
     return (
       lower.includes("achat d'oeuf") ||
       lower.includes("achat d'œuf") ||
-      lower.includes("achat d'œufs à couver") ||
+      lower.includes('achat oeuf') ||
+      lower.includes('achat œuf')
+    );
+  };
+
+  const isAchatOac = useMemo(() => isAchatOacSubCat(sousCategorie), [sousCategorie]);
+
+  const isIdComRequired = useMemo(() => {
+    if (!sousCategorie) return false;
+    const lower = sousCategorie.toLowerCase();
+    return (
+      isAchatOacSubCat(sousCategorie) ||
       lower.includes('transport des oeuf') ||
       lower.includes('transport des œuf') ||
       lower.includes('dedouanement') ||
@@ -242,30 +248,134 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     );
   }, [sousCategorie]);
 
-  const availableOacIds = useMemo(() => {
-    const ids = new Set<string>();
-    oacList.forEach((o) => {
-      if (o.id) ids.add(o.id);
-    });
-    depenses.forEach((d) => {
-      if (d.idCommande) ids.add(d.idCommande);
-    });
-    return Array.from(ids);
-  }, [oacList, depenses]);
-
-  const recentOacIds = useMemo(() => {
-    const parseMs = (d?: string) => {
-      if (!d) return 0;
-      const parts = String(d).split('/').map(Number);
+  const parseDateToMs = (d?: string, fallbackMs?: number): number => {
+    if (d) {
+      const parts = String(d).trim().split('/').map(Number);
       if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
         return new Date(parts[2], parts[1] - 1, parts[0]).getTime();
       }
-      return 0;
-    };
-    return [...oacList]
-      .sort((a, b) => parseMs(b.date) - parseMs(a.date))
-      .slice(0, 10);
-  }, [oacList]);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(d).trim())) {
+        const ms = new Date(String(d).trim()).getTime();
+        if (!isNaN(ms)) return ms;
+      }
+    }
+    return fallbackMs && !isNaN(fallbackMs) ? fallbackMs : 0;
+  };
+
+  const parseOacIdOrder = (id: string): number => {
+    const m = String(id || '').match(/OAC-(\d{4})-(\d+)/i);
+    if (!m) return 0;
+    return parseInt(m[1], 10) * 10000 + parseInt(m[2], 10);
+  };
+
+  // Prochain ID OAC auto-généré en vérifiant à la fois oacList ET depenses
+  const nextAutoOacId = useMemo(() => {
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const prefix = `OAC-${yy}${mm}-`;
+
+    const allIds = new Set<string>();
+    oacList.forEach((o) => {
+      if (o.id) allIds.add(String(o.id).trim());
+    });
+    depenses.forEach((d) => {
+      if (d.idCommande) allIds.add(String(d.idCommande).trim());
+    });
+
+    let nextNum = 1;
+    allIds.forEach((id) => {
+      if (id.startsWith(prefix)) {
+        const num = parseInt(id.split('-')[2] || '0', 10);
+        if (!isNaN(num) && num >= nextNum) {
+          nextNum = num + 1;
+        }
+      }
+    });
+    return `${prefix}${String(nextNum).padStart(3, '0')}`;
+  }, [oacList, depenses]);
+
+  interface OacChoiceItem {
+    id: string;
+    libelle: string;
+    dateStr: string;
+    sortMs: number;
+    statutLabel: string;
+    meta: string;
+    ligneOrder: number;
+  }
+
+  // Tous les lots OAC enrichis avec leur libellé de demande, triés du plus récent au plus ancien
+  const allOacChoices = useMemo<OacChoiceItem[]>(() => {
+    const idSet = new Set<string>();
+    oacList.forEach((o) => {
+      const id = String(o.id || '').trim();
+      if (id && id !== '__NOUVEAU__') idSet.add(id);
+    });
+    depenses.forEach((d) => {
+      const id = String(d.idCommande || '').trim();
+      if (id && id !== '__NOUVEAU__') idSet.add(id);
+    });
+
+    const items: OacChoiceItem[] = [];
+    idSet.forEach((id) => {
+      const oac = oacList.find((o) => String(o.id || '').trim() === id);
+      const relatedDeps = depenses.filter((d) => String(d.idCommande || '').trim() === id);
+      const achatDep = relatedDeps.find((d) => isAchatOacSubCat(d.sousCategorie || ''));
+      const fallbackDep = relatedDeps[0];
+
+      const primaryLibelle =
+        (achatDep?.libelle && achatDep.libelle.trim()) ||
+        (oac
+          ? `Commande ${oac.type || 'OAC'} ${oac.race || ''} — ${oac.cartons || 0} cartons (${oac.fournisseur || 'Fournisseur N/A'})`
+          : '') ||
+        (fallbackDep?.libelle && fallbackDep.libelle.trim()) ||
+        fallbackDep?.sousCategorie ||
+        'Demande OAC';
+
+      const dateStr = achatDep?.date || oac?.date || fallbackDep?.date || '--';
+      const sortMs =
+        parseDateToMs(achatDep?.date, achatDep?.dateMs) ||
+        parseDateToMs(oac?.date) ||
+        parseDateToMs(fallbackDep?.date, fallbackDep?.dateMs);
+
+      const metaParts: string[] = [];
+      if (oac?.fournisseur) metaParts.push(oac.fournisseur);
+      if (oac?.cartons) metaParts.push(`${oac.cartons} cartons`);
+      if (oac?.race) metaParts.push(oac.race);
+      if (!oac && achatDep?.montant) {
+        metaParts.push(`${Number(achatDep.montant).toLocaleString('fr-FR')} FCFA`);
+      }
+
+      const statutLabel = oac?.statut
+        ? oac.statut
+        : achatDep
+          ? 'Achat OAC enregistré'
+          : 'Dépense OAC';
+
+      const ligneOrder = Math.max(oac?.ligne ?? 0, achatDep?.ligne ?? 0, fallbackDep?.ligne ?? 0);
+
+      items.push({
+        id,
+        libelle: primaryLibelle,
+        dateStr,
+        sortMs,
+        statutLabel,
+        meta: metaParts.join(' • '),
+        ligneOrder,
+      });
+    });
+
+    return items.sort((a, b) => {
+      if (b.sortMs !== a.sortMs) return b.sortMs - a.sortMs;
+      const idDiff = parseOacIdOrder(b.id) - parseOacIdOrder(a.id);
+      if (idDiff !== 0) return idDiff;
+      return b.ligneOrder - a.ligneOrder;
+    });
+  }, [oacList, depenses]);
+
+  // Limite stricte aux 4 ID les plus récents
+  const recentOacChoices = useMemo(() => allOacChoices.slice(0, 4), [allOacChoices]);
 
   const fmt = (v: number | string) => {
     if (v === '' || v === null || v === undefined) return '--';
@@ -310,9 +420,15 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
   const handleSelectSousCat = (item: { sousCategorie: string; idRequis?: boolean }, catName: string) => {
     setSousCategorie(item.sousCategorie);
     setCategorie(catName);
-    if (item.idRequis) {
-      if (!idCommande) {
-        setIdCommande('__NOUVEAU__');
+    if (isAchatOacSubCat(item.sousCategorie)) {
+      // Pour "Achat d'œufs à couver" : création automatique d'un nouvel ID
+      if (!isRowSelected || !idCommande || idCommande === '__NOUVEAU__') {
+        setIdCommande(nextAutoOacId);
+      }
+    } else if (item.idRequis) {
+      // Pour Transport / Dédouanement : l'utilisateur doit choisir l'ID correspondant dans la liste
+      if (!isRowSelected || idCommande === '__NOUVEAU__' || idCommande === nextAutoOacId) {
+        setIdCommande('');
       }
     } else {
       setIdCommande('');
@@ -339,20 +455,15 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     }
 
     let finalIdCom = idCommande;
-    if (isIdComRequired && (!finalIdCom || finalIdCom === '__NOUVEAU__')) {
-      const now = new Date();
-      const yy = String(now.getFullYear()).slice(-2);
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const prefix = `OAC-${yy}${mm}-`;
-      const existingIds = oacList.map(o => o.id);
-      const relevantIds = existingIds.filter(id => id.startsWith(prefix));
-      
-      let nextNum = 1;
-      if (relevantIds.length > 0) {
-        const nums = relevantIds.map(id => parseInt(id.split('-')[2] || '0', 10));
-        nextNum = Math.max(...nums) + 1;
+    if (isAchatOac) {
+      finalIdCom = idCommande && idCommande !== '__NOUVEAU__' ? idCommande : nextAutoOacId;
+    } else if (isIdComRequired) {
+      if (!finalIdCom || finalIdCom === '__NOUVEAU__') {
+        showNotif("Veuillez sélectionner l'ID commande correspondant dans la liste.", false);
+        return;
       }
-      finalIdCom = `${prefix}${String(nextNum).padStart(3, '0')}`;
+    } else {
+      finalIdCom = '';
     }
 
     const dateParts = date.split('-');
@@ -372,7 +483,10 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     };
 
     onAddDepense(newDepense);
-    showNotif(`Dépense enregistrée : ${sousCategorie} — ${parseFloat(montant).toLocaleString('fr-FR')} FCFA`, true);
+    showNotif(
+      `Dépense enregistrée${finalIdCom ? ` (${finalIdCom})` : ''} : ${sousCategorie} — ${parseFloat(montant).toLocaleString('fr-FR')} FCFA`,
+      true
+    );
     raz();
     setShowForm(false);
   };
@@ -385,20 +499,15 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     }
 
     let finalIdCom = idCommande;
-    if (isIdComRequired && (!finalIdCom || finalIdCom === '__NOUVEAU__')) {
-      const now = new Date();
-      const yy = String(now.getFullYear()).slice(-2);
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const prefix = `OAC-${yy}${mm}-`;
-      const existingIds = oacList.map(o => o.id);
-      const relevantIds = existingIds.filter(id => id.startsWith(prefix));
-      
-      let nextNum = 1;
-      if (relevantIds.length > 0) {
-        const nums = relevantIds.map(id => parseInt(id.split('-')[2] || '0', 10));
-        nextNum = Math.max(...nums) + 1;
+    if (isAchatOac) {
+      finalIdCom = idCommande && idCommande !== '__NOUVEAU__' ? idCommande : nextAutoOacId;
+    } else if (isIdComRequired) {
+      if (!finalIdCom || finalIdCom === '__NOUVEAU__') {
+        showNotif("Veuillez sélectionner l'ID commande correspondant dans la liste.", false);
+        return;
       }
-      finalIdCom = `${prefix}${String(nextNum).padStart(3, '0')}`;
+    } else {
+      finalIdCom = '';
     }
 
     const dateParts = date.split('-');
@@ -422,7 +531,10 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
     } else {
       onAddDepense(updated);
     }
-    showNotif(`Dépense modifiée : ${sousCategorie} — ${parseFloat(montant).toLocaleString('fr-FR')} FCFA`, true);
+    showNotif(
+      `Dépense modifiée${finalIdCom ? ` (${finalIdCom})` : ''} : ${sousCategorie} — ${parseFloat(montant).toLocaleString('fr-FR')} FCFA`,
+      true
+    );
     raz();
     setShowForm(false);
   };
@@ -952,53 +1064,155 @@ export const DepensesModule: React.FC<DepensesModuleProps> = ({
                 </div>
               </div>
 
-              {/* Row 4: ID Commande (Conditionnel) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-[#2c3e50] mb-1.5 flex items-center gap-1.5">
+              {/* Row 4: ID Commande (Auto pour Achat OAC, sélection limitée à 4 récents pour Transport/Dédouanement) */}
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                  <label className="text-xs font-bold text-[#2c3e50] flex items-center gap-1.5">
                     <span className="opacity-70">🔗</span>
-                    <span>ID Commande</span>
+                    <span>ID Commande (Lot OAC)</span>
                     {isIdComRequired && <span className="text-[#E74C3C]">*</span>}
-                    {isIdComRequired && (
-                      <span className="text-[10px] text-[#f39c12] font-bold ml-1">(visible si achat/transport/dédouanement)</span>
-                    )}
                   </label>
-                  <select
-                    disabled={!isIdComRequired}
-                    value={idCommande}
-                    onChange={(e) => setIdCommande(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1]"
-                    style={
-                      isIdComRequired
-                        ? {
-                            background: 'linear-gradient(135deg, #fef9e7, #fdf6e3)',
-                            border: '2px solid #f39c12',
-                            cursor: 'pointer',
-                            color: '#1a2332',
-                          }
-                        : {
-                            background: '#eef2f7',
-                            color: '#a8b4c0',
-                            cursor: 'not-allowed',
-                            border: '2px solid #d5dde5',
-                          }
-                    }
-                  >
-                    <option value="">-- Choisir --</option>
-                    <option value="__NOUVEAU__">Nouvel ID (auto)</option>
-                    {recentOacIds.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.id} (Récemment créé)
-                      </option>
-                    ))}
-                    {/* All other IDs */}
-                    {availableOacIds.filter(id => !recentOacIds.map(o => o.id).includes(id)).map((id) => (
-                      <option key={id} value={id}>
-                        {id}
-                      </option>
-                    ))}
-                  </select>
+                  {isAchatOac && (
+                    <span className="text-[11px] font-bold text-[#1E8449] bg-[#eafaf1] border border-[#27AE60]/30 px-2 py-0.5 rounded-md">
+                      Création automatique
+                    </span>
+                  )}
+                  {isIdComRequired && !isAchatOac && (
+                    <span className="text-[11px] font-medium text-slate-500">
+                      4 lots les plus récents (du plus récent au plus ancien)
+                    </span>
+                  )}
                 </div>
+
+                {!isIdComRequired ? (
+                  <div className="w-full md:w-1/2 px-3.5 py-2.5 rounded-lg text-xs font-semibold bg-[#eef2f7] text-[#7f8c8d] border-2 border-[#d5dde5]">
+                    Non requis pour cette sous-catégorie
+                  </div>
+                ) : isAchatOac ? (
+                  <div
+                    className="rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                    style={{
+                      background: 'linear-gradient(135deg, #eafaf1, #f4fcf7)',
+                      border: '2px solid #27AE60',
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="px-3 py-1.5 rounded-lg bg-[#1E8449] text-white font-mono text-sm font-black tracking-wide shadow-xs">
+                        {idCommande && idCommande !== '__NOUVEAU__' ? idCommande : nextAutoOacId}
+                      </span>
+                      <div>
+                        <div className="text-xs font-bold text-[#1E8449]">
+                          {isRowSelected && idCommande && idCommande !== nextAutoOacId
+                            ? 'Identifiant OAC lié à cet achat'
+                            : 'Nouvel ID OAC généré automatiquement'}
+                        </div>
+                        <div className="text-[11px] text-slate-600">
+                          Cet identifiant servira ensuite à rattacher le transport et le dédouanement de ce lot.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border-2 border-[#f39c12] bg-[#fefcf6] overflow-hidden">
+                    {recentOacChoices.length === 0 ? (
+                      <div className="p-4 text-xs text-amber-800 bg-amber-50/70">
+                        Aucun lot OAC disponible. Enregistrez d&apos;abord une dépense « Achat d&apos;œufs à couver ».
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-amber-200/70">
+                        {recentOacChoices.map((choice) => {
+                          const selected = idCommande === choice.id;
+                          return (
+                            <button
+                              key={choice.id}
+                              type="button"
+                              onClick={() => setIdCommande(choice.id)}
+                              className={`w-full text-left px-3.5 py-2.5 transition flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer ${
+                                selected
+                                  ? 'bg-[#eaf2f8] ring-2 ring-inset ring-[#2E86C1]'
+                                  : 'hover:bg-[#fef5e7]'
+                              }`}
+                            >
+                              <div className="flex items-start sm:items-center gap-3 min-w-0">
+                                <span
+                                  className={`mt-0.5 sm:mt-0 w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                                    selected
+                                      ? 'border-[#1B4F72] bg-[#1B4F72] text-white'
+                                      : 'border-slate-400 bg-white'
+                                  }`}
+                                >
+                                  {selected && <span className="text-[10px] font-black leading-none">✓</span>}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded font-mono text-xs font-black shrink-0 ${
+                                    selected
+                                      ? 'bg-[#1B4F72] text-white'
+                                      : 'bg-slate-200 text-slate-800'
+                                  }`}
+                                >
+                                  {choice.id}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-slate-900 truncate">
+                                    {choice.libelle}
+                                  </div>
+                                  {choice.meta && (
+                                    <div className="text-[11px] text-slate-500 truncate">
+                                      {choice.meta}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2.5 sm:text-right shrink-0 pl-7 sm:pl-0">
+                                <span className="text-[11px] font-bold text-slate-700 tabular-nums">
+                                  {choice.dateStr}
+                                </span>
+                                <span className="text-[10px] font-semibold text-[#1B4F72] bg-white px-2 py-0.5 rounded border border-slate-200">
+                                  {choice.statutLabel}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+
+                        {/* Si modification d'une dépense ancienne dont l'ID n'est plus dans les 4 plus récents */}
+                        {isRowSelected &&
+                          idCommande &&
+                          idCommande !== '__NOUVEAU__' &&
+                          !recentOacChoices.some((c) => c.id === idCommande) && (() => {
+                            const currentChoice = allOacChoices.find((c) => c.id === idCommande);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => setIdCommande(idCommande)}
+                                className="w-full text-left px-3.5 py-2.5 bg-[#eaf2f8] ring-2 ring-inset ring-[#2E86C1] flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span className="w-4 h-4 rounded-full border-2 border-[#1B4F72] bg-[#1B4F72] text-white flex items-center justify-center shrink-0">
+                                    <span className="text-[10px] font-black leading-none">✓</span>
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded font-mono text-xs font-black bg-[#1B4F72] text-white shrink-0">
+                                    {idCommande}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <div className="text-xs font-bold text-slate-900 truncate">
+                                      {currentChoice?.libelle || 'Lot OAC sélectionné'}
+                                    </div>
+                                    <div className="text-[11px] text-slate-500">Sélection actuelle</div>
+                                  </div>
+                                </div>
+                                {currentChoice?.dateStr && (
+                                  <span className="text-[11px] font-bold text-slate-700 shrink-0 pl-7 sm:pl-0">
+                                    {currentChoice.dateStr}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })()}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Justificatifs (photos / PDF)

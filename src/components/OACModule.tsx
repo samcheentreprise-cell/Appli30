@@ -28,12 +28,17 @@ import {
 //    Script Properties → clé `emails_admins`). GAS utilise
 //    automatiquement cette config quand on ne passe pas de
 //    destinataires.
-const sendAdminNotification = async (subject: string, text: string) => {
+const sendAdminNotification = async (subject: string, text: string): Promise<boolean> => {
   try {
-    // On ne passe pas de destinataires : GAS utilise sa config server-side
-    await sendAdminNotificationEmail(subject, text);
+    const res = await sendAdminNotificationEmail(subject, text);
+    if (!res.success) {
+      console.error('[OACModule] Échec envoi email notification:', res.message);
+      return false;
+    }
+    return true;
   } catch (error) {
-    console.error('Failed to send notification email', error);
+    console.error('[OACModule] Exception envoi notification email:', error);
+    return false;
   }
 };
 
@@ -762,6 +767,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
           }
           setActiveCorrection(null);
           playAlertSound('success');
+          await sendAdminNotification(
+            'Commande corrigée en attente de validation',
+            `Une commande rejetée a été corrigée et re-transmise par ${currentUser?.username || 'Opérateur'} :\n${resume}\nSoumission : ${updated.idSoumission}`
+          );
           showNotification('📨 Commande corrigée et re-transmise pour validation administrateur.', true);
         } else {
           const newSoumission: SoumissionEnAttente = {
@@ -781,7 +790,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
             return;
           }
           playAlertSound('success');
-          sendAdminNotification('Nouvelle commande en attente', `Une nouvelle commande a été soumise par ${newSoumission.soumisPar}: ${resume}`);
+          await sendAdminNotification(
+            'Nouvelle commande en attente de validation',
+            `Une nouvelle commande a été soumise par ${newSoumission.soumisPar} :\n${resume}\nSoumission : ${newSoumission.idSoumission}`
+          );
           showNotification('📨 Commande transmise à la validation administrateur avec succès. Elle sera intégrée dès son approbation.', true);
         }
         razC();
@@ -815,6 +827,15 @@ export const OACModule: React.FC<OACModuleProps> = ({
         };
         const resume = `Mirage lot ${mId} : ${clairsNum} clairs, ${fertiles} fertiles`;
 
+        const tauxFert = cubes > 0 ? ((fertiles / cubes) * 100).toFixed(1) : '0.0';
+        const mirageDetails =
+          `Lot : ${mId} (${existing.type || ''} ${existing.race || ''} - ${existing.fournisseur || ''})\n` +
+          `Œufs incubés : ${cubes}\n` +
+          `Œufs clairs : ${clairsNum}\n` +
+          `Œufs fertiles : ${fertiles} (${tauxFert}%)\n` +
+          `Éclosion prévue : ${existing.eclosion || 'N/A'}\n` +
+          `Soumis par : ${currentUser?.username || 'Opérateur'}`;
+
         setIsSubmittingAction(true);
         try {
           if (activeCorrection && activeCorrection.type === 'Mirage') {
@@ -834,6 +855,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
             }
             setActiveCorrection(null);
             playAlertSound('success');
+            await sendAdminNotification(
+              `Mirage corrigé en attente de validation (${mId})`,
+              `Un mirage corrigé a été re-transmis pour validation :\n\n${mirageDetails}\nSoumission : ${updated.idSoumission}`
+            );
             showNotification('📨 Mirage corrigé et re-transmis à la validation administrateur.', true);
           } else {
             const newSoumission: SoumissionEnAttente = {
@@ -853,7 +878,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
               return;
             }
             playAlertSound('success');
-            sendAdminNotification('Nouveau mirage en attente', `Un nouveau mirage a été soumis par ${newSoumission.soumisPar}: ${resume}`);
+            await sendAdminNotification(
+              `Nouveau mirage en attente de validation (${mId})`,
+              `Un nouveau mirage a été soumis pour validation :\n\n${mirageDetails}\nSoumission : ${newSoumission.idSoumission}`
+            );
             showNotification('📨 Déclaration de mirage transmise à la validation administrateur.', true);
           }
           razM();
@@ -921,6 +949,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
             }
             setActiveCorrection(null);
             playAlertSound('success');
+            await sendAdminNotification(
+              `Éclosion corrigée en attente de validation (${eId})`,
+              `Une éclosion corrigée a été re-transmise par ${currentUser?.username || 'Opérateur'} :\n${resume}\nSoumission : ${updated.idSoumission}`
+            );
             showNotification('📨 Éclosion corrigée et re-transmise à la validation administrateur.', true);
           } else {
             const newSoumission: SoumissionEnAttente = {
@@ -940,7 +972,10 @@ export const OACModule: React.FC<OACModuleProps> = ({
               return;
             }
             playAlertSound('success');
-            sendAdminNotification('Nouvelle éclosion en attente', `Une nouvelle éclosion a été soumise par ${newSoumission.soumisPar}: ${resume}`);
+            await sendAdminNotification(
+              `Nouvelle éclosion en attente de validation (${eId})`,
+              `Une nouvelle éclosion a été soumise par ${newSoumission.soumisPar} :\n${resume}\nSoumission : ${newSoumission.idSoumission}`
+            );
             showNotification('📨 Déclaration d\'éclosion transmise à la validation administrateur.', true);
           }
           razE();

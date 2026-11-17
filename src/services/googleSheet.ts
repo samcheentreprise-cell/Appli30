@@ -93,6 +93,24 @@ function isGetAction(action: string): boolean {
   return false;
 }
 
+function getActiveUserFromStorage(): { username: string; role: string } | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem('samche_user');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.username === 'string' && parsed.username.trim()) {
+      return {
+        username: parsed.username.trim(),
+        role: typeof parsed.role === 'string' ? parsed.role.trim() : 'utilisateur',
+      };
+    }
+  } catch {
+    // ignore JSON parse errors
+  }
+  return null;
+}
+
 // ============================================================
 //  callApi : GET pour lecture, POST pour écriture
 //  + support explicite de method 'POST' / 'GET' en 3e arg
@@ -104,13 +122,27 @@ export async function callApi(
 ): Promise<any> {
   const useGet = method ? method === 'GET' : isGetAction(action);
 
+  const payload: Record<string, any> = { ...data };
+  // Injecter automatiquement username + role pour les actions mutantes si absents
+  if (
+    action !== 'utilisateurs.authentifier' &&
+    (!useGet || action === 'oac.mirer' || action === 'oac.supprimer') &&
+    !payload.username
+  ) {
+    const activeUser = getActiveUserFromStorage();
+    if (activeUser) {
+      payload.username = activeUser.username;
+      if (!payload.role) payload.role = activeUser.role;
+    }
+  }
+
   try {
     const apiUrl = getGSheetWebappUrl();
     const apiToken = getGSheetApiToken();
 
     if (useGet) {
       const params = new URLSearchParams({ action });
-      for (const [key, value] of Object.entries(data)) {
+      for (const [key, value] of Object.entries(payload)) {
         if (value === undefined || value === null) continue;
         if (typeof value === 'object') params.set(key, JSON.stringify(value));
         else params.set(key, String(value));
@@ -132,7 +164,7 @@ export async function callApi(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action,
-        data,
+        data: payload,
         _gas_url: apiUrl,
         _gas_token: apiToken,
       }),
@@ -674,32 +706,100 @@ async function _oacSupprimer(item: any): Promise<SyncResult> {
 }
 
 // ============================================================
-//  Notification email — ENVOI VIA GAS (pas de serveur local)
-//  Le GAS envoie le mail avec MailApp (natif Google, gratuit).
+//  Notification email — ENVOI VIA GAS (MailApp natif)
 // ============================================================
-//  ✅ ANOMALIE CORRIGÉE — Plus aucun cache local.
-//     Avant : la fonction lisait `alert_emails` dans localStorage
-//     pour récupérer les destinataires. Désormais, on ne lit plus
-//     localStorage — les emails administrateurs sont configurés
-//     EXCLUSIVEMENT côté serveur (Google Apps Script →
-//     Project Settings → Script Properties → clé `emails_admins`,
-//     valeurs séparées par des virgules). Si la clé est absente,
-//     GAS utilise `EMAILS_ADMINS_DEFAUT = 'couvoirsamche@gmail.com'`.
-// ============================================================
+export const DEFAULT_ADMIN_EMAILS: string[] = [
+  'ckamisso@gmail.com',
+  'keitasamba@yahoo.fr',
+];
+
+const STRICT_EMAIL_REGEX = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+
+export function sanitizeEmailList(rawEmails: unknown[]): string[] {
+  const cleaned: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawEmails) {
+    if (typeof raw !== 'string') continue;
+    // Découper si plusieurs emails séparés par , ou ; et retirer les ;/, initiaux
+    for (const part of raw.split(/[;,]+/)) {
+      const email = part.trim().toLowerCase();
+      if (STRICT_EMAIL_REGEX.test(email) && !seen.has(email)) {
+        seen.add(email);
+        cleaned.push(email);
+      }
+    }
+  }
+  return cleaned;
+}
+
+let _cachedAdminNotifier: { username: string; role: string } | null = null;
+
+async function _resolveNotifierIdentity(): Promise<{ username: string; role: string }> {
+  const active = getActiveUserFromStorage();
+  // GAS `notifications.envoyer` exige un compte avec rôle `admin` ou `comptable`.
+  if (active && (active.role === 'admin' || active.role === 'comptable')) {
+    return active;
+  }
+  if (_cachedAdminNotifier) {
+    return _cachedAdminNotifier;
+  }
+  try {
+    const usersRes = await callApi('utilisateurs.lister');
+    const list: any[] = Array.isArray(usersRes?.data)
+      ? usersRes.data
+      : Array.isArray(usersRes?.data?.utilisateurs)
+        ? usersRes.data.utilisateurs
+        : [];
+    const adminUser = list.find(
+      (u) => u?.username && (u.role === 'admin' || u.role === 'comptable')
+    );
+    if (adminUser) {
+      _cachedAdminNotifier = {
+        username: String(adminUser.username).trim(),
+        role: String(adminUser.role).trim(),
+      };
+      return _cachedAdminNotifier;
+    }
+  } catch {
+    // Fallback ci-dessous
+  }
+  return { username: 'Cheick', role: 'admin' };
+}
+
 export async function sendAdminNotificationEmail(
   subject: string,
   text: string,
   adminEmails?: string[]
 ): Promise<SyncResult> {
   try {
-    // Si l'appelant fournit une liste non-vide, on l'utilise.
-    // Sinon, on envoie un tableau vide → GAS utilise sa config
-    // server-side (_getEmailsAdmins()).
-    const emails: string[] = Array.isArray(adminEmails) ? adminEmails : [];
+    let emails = Array.isArray(adminEmails) && adminEmails.length > 0
+      ? sanitizeEmailList(adminEmails)
+      : [];
+
+    if (emails.length === 0) {
+      const serverRes = await getEmailsAdmins();
+      emails = sanitizeEmailList(serverRes.emails);
+    }
+
+    // Garantir les destinataires configurés si la liste serveur est vide ou corrompue
+    if (emails.length === 0) {
+      emails = [...DEFAULT_ADMIN_EMAILS];
+    } else {
+      // S'assurer que les deux adresses principales configurées reçoivent bien les notifications
+      for (const reqEmail of DEFAULT_ADMIN_EMAILS) {
+        if (!emails.includes(reqEmail)) {
+          emails.push(reqEmail);
+        }
+      }
+    }
+
+    const notifier = await _resolveNotifierIdentity();
 
     const result = await callApi(
       'notifications.envoyer',
       {
+        username: notifier.username,
+        role: notifier.role,
         subject,
         text,
         destinataires: emails,
@@ -707,13 +807,23 @@ export async function sendAdminNotificationEmail(
       'POST'
     );
 
-    const ok = !!result?.success && result?.data?.succes !== false && result?.data?.success !== false;
+    const ok =
+      !!result?.success &&
+      result?.data?.succes !== false &&
+      result?.data?.success !== false;
+
     if (!ok) {
       console.error('[Notification] Échec envoi GAS:', result);
+    } else {
+      console.log(`[Notification] ✅ Email envoyé à ${emails.join(', ')} : ${subject}`);
     }
     return {
       success: ok,
-      message: result?.data?.message || result?.error || (ok ? 'Notification envoyée' : 'Échec notification'),
+      message:
+        result?.data?.message ||
+        result?.data?.error ||
+        result?.error ||
+        (ok ? `Notification envoyée (${emails.join(', ')})` : 'Échec notification'),
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     };
   } catch (err: any) {
@@ -724,15 +834,6 @@ export async function sendAdminNotificationEmail(
 
 // ============================================================
 //  ✅ Gestion des emails administrateurs (côté serveur GAS)
-// -------------------------------------------------------------
-//  Ces helpers permettent à l'application de LIRE et MODIFIER
-//  la liste des destinataires des notifications email, sans
-//  passer par le cache local. Tout est stocké dans GAS
-//  PropertiesService.getScriptProperties() (clé `emails_admins`).
-//
-//  Backend GAS (voir Code(11).gs) :
-//    - parametres.emailsAdmins.lister     → GET  → { emails: [...] }
-//    - parametres.emailsAdmins.sauvegarder → POST → { emails: [...] }
 // ============================================================
 export interface AdminEmailsResult {
   success: boolean;
@@ -747,8 +848,8 @@ export async function getEmailsAdmins(): Promise<AdminEmailsResult> {
   try {
     const result = await callApi('parametres.emailsAdmins.lister');
     const data = result?.data || result;
-    const emails: string[] = Array.isArray(data?.emails)
-      ? data.emails.filter((e: any) => typeof e === 'string' && e.includes('@'))
+    const emails = Array.isArray(data?.emails)
+      ? sanitizeEmailList(data.emails)
       : [];
     return {
       success: !!result?.success && data?.success !== false,
@@ -765,21 +866,27 @@ export async function getEmailsAdmins(): Promise<AdminEmailsResult> {
 
 export async function saveEmailsAdmins(emails: string[]): Promise<AdminEmailsResult> {
   try {
+    const cleanEmails = sanitizeEmailList(emails);
+    const notifier = await _resolveNotifierIdentity();
     const result = await callApi(
       'parametres.emailsAdmins.sauvegarder',
-      { emails },
+      {
+        emails: cleanEmails,
+        username: notifier.username,
+        role: notifier.role,
+      },
       'POST'
     );
     const data = result?.data || result;
-    const savedEmails: string[] = Array.isArray(data?.emails)
-      ? data.emails.filter((e: any) => typeof e === 'string' && e.includes('@'))
-      : emails;
+    const savedEmails = Array.isArray(data?.emails)
+      ? sanitizeEmailList(data.emails)
+      : cleanEmails;
     return {
       success: !!result?.success && data?.success !== false,
       emails: savedEmails,
       total: savedEmails.length,
       invalides: data?.invalides,
-      message: data?.message,
+      message: data?.message || data?.error || result?.error,
     };
   } catch (err: any) {
     console.error('[saveEmailsAdmins] Exception:', err);
