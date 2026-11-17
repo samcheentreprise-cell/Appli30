@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { Calendar, Download, Printer, ArrowRight, RotateCcw, Layers, GitCommitHorizontal, Check } from 'lucide-react';
+import { Calendar, Download, FileDown, ArrowRight, RotateCcw, Layers, GitCommitHorizontal, Check, Box } from 'lucide-react';
 import { OAC } from '../types';
+import { downloadPlanningPdf } from '../utils/planningPdf';
 
 export interface ActiveLotAnchor {
   id: string;
@@ -22,6 +23,7 @@ interface IncubationPlannerProps {
 }
 
 const MIN_CARTONS_LOT = 54;
+const DEFAULT_UNIQUE_CARTONS = 160;
 
 interface PlannedOrderRow {
   rowKey: string;
@@ -125,19 +127,22 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     return Math.min(95, Math.max(55, pct));
   }, [allLots]);
 
-  // Mode principal : Vision globale (tous les lots en cours) vs Point de départ Cycle 1 (1 lot ou date)
-  const [planningScope, setPlanningScope] = useState<'global' | 'single'>(
+  // Mode principal :
+  // - 'global' : Rechargement multiple · Vision globale (tous les lots en cours)
+  // - 'single' : Rechargement multiple · Point de départ Cycle 1 (1 lot ou date)
+  // - 'unique' : Chargement unique · 160 cartons (incubateur complet, cycle en changement)
+  const [planningScope, setPlanningScope] = useState<'global' | 'single' | 'unique'>(
     validAnchors.length >= 2 ? 'global' : 'single'
   );
   const [hasUserChangedScope, setHasUserChangedScope] = useState(false);
 
-  // État Vision globale
+  // État Vision globale (rechargement multiple)
   const [selectedGlobalIds, setSelectedGlobalIds] = useState<string[]>(defaultGlobalLotIds);
   const [hasUserEditedGlobalSelection, setHasUserEditedGlobalSelection] = useState(false);
   const [rotationsParLot, setRotationsParLot] = useState<number>(1);
   const [globalVolumeMode, setGlobalVolumeMode] = useState<'lot' | 'uniform'>('lot');
 
-  // État Point de départ Cycle 1 (mode ciblé)
+  // État Point de départ Cycle 1 (rechargement multiple ciblé)
   const [anchorMode, setAnchorMode] = useState<'lot' | 'custom'>(
     defaultSingleAnchor ? 'lot' : 'custom'
   );
@@ -149,6 +154,28 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     toIsoInput(defaultSingleAnchor?.dateMirage ? addDays(defaultSingleAnchor.dateMirage, 1) : addDays(today, 1))
   );
   const [nbCycles, setNbCycles] = useState<number>(4);
+
+  // État Chargement unique (160 cartons · cycle en changement)
+  const transitionLots = useMemo(
+    () => (incubatingAnchors.length > 0 ? incubatingAnchors : validAnchors),
+    [incubatingAnchors, validAnchors]
+  );
+  const lastTransitionLot = useMemo(
+    () => (transitionLots.length > 0 ? transitionLots[transitionLots.length - 1] : null),
+    [transitionLots]
+  );
+  const [uniqueStartMode, setUniqueStartMode] = useState<'transition' | 'lot' | 'custom'>(
+    transitionLots.length > 0 ? 'transition' : 'custom'
+  );
+  const [hasUserChangedUniqueMode, setHasUserChangedUniqueMode] = useState(false);
+  const [uniqueSelectedLotId, setUniqueSelectedLotId] = useState<string>(
+    defaultSingleAnchor?.id || ''
+  );
+  const [uniqueCustomDate, setUniqueCustomDate] = useState<string>(() =>
+    toIsoInput(lastTransitionLot?.dateMirage ? addDays(lastTransitionLot.dateMirage, 1) : addDays(today, 1))
+  );
+  const [cartonsUnique, setCartonsUnique] = useState<number>(DEFAULT_UNIQUE_CARTONS);
+  const [uniqueNbCycles, setUniqueNbCycles] = useState<number>(4);
 
   // Paramètres opérationnels partagés
   const [delaiCommandeJours, setDelaiCommandeJours] = useState<number>(7);
@@ -163,6 +190,7 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
   const [racePrevue, setRacePrevue] = useState<string>(
     defaultSingleAnchor?.race || 'Ross 308'
   );
+  const [pdfGenerating, setPdfGenerating] = useState(false);
 
   // Synchronisation lorsque oacList arrive après le premier rendu
   useEffect(() => {
@@ -171,6 +199,12 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     }
     if (!hasUserEditedGlobalSelection && defaultGlobalLotIds.length > 0) {
       setSelectedGlobalIds(defaultGlobalLotIds);
+    }
+    if (!hasUserChangedUniqueMode && transitionLots.length > 0 && uniqueStartMode === 'custom') {
+      setUniqueStartMode('transition');
+    }
+    if (validAnchors.length > 0 && !uniqueSelectedLotId && defaultSingleAnchor) {
+      setUniqueSelectedLotId(defaultSingleAnchor.id);
     }
     if (validAnchors.length > 0 && !hasUserChangedSingleMode && anchorMode === 'custom' && defaultSingleAnchor) {
       setAnchorMode('lot');
@@ -190,9 +224,13 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     validAnchors,
     defaultGlobalLotIds,
     defaultSingleAnchor,
+    transitionLots,
     planningScope,
     hasUserChangedScope,
     hasUserEditedGlobalSelection,
+    uniqueStartMode,
+    hasUserChangedUniqueMode,
+    uniqueSelectedLotId,
     anchorMode,
     selectedAnchorId,
     hasUserChangedSingleMode,
@@ -201,6 +239,11 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
   const activeAnchorObj = useMemo(
     () => validAnchors.find((a) => a.id === selectedAnchorId) || defaultSingleAnchor || null,
     [validAnchors, selectedAnchorId, defaultSingleAnchor]
+  );
+
+  const uniqueAnchorObj = useMemo(
+    () => validAnchors.find((a) => a.id === uniqueSelectedLotId) || defaultSingleAnchor || null,
+    [validAnchors, uniqueSelectedLotId, defaultSingleAnchor]
   );
 
   const selectedGlobalLots = useMemo(
@@ -219,6 +262,25 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     const found = validAnchors.find((a) => a.id === lotId);
     if (found) {
       if (found.cartons > 0) setCartonsParLot(Math.max(MIN_CARTONS_LOT, found.cartons));
+      if (found.fournisseur) setFournisseurPrevu(found.fournisseur);
+      if (found.race) setRacePrevue(found.race);
+    }
+  };
+
+  const handleSelectUniqueStart = (val: string) => {
+    setHasUserChangedUniqueMode(true);
+    if (val === '__transition__') {
+      setUniqueStartMode('transition');
+      return;
+    }
+    if (val === '__custom__') {
+      setUniqueStartMode('custom');
+      return;
+    }
+    setUniqueStartMode('lot');
+    setUniqueSelectedLotId(val);
+    const found = validAnchors.find((a) => a.id === val);
+    if (found) {
       if (found.fournisseur) setFournisseurPrevu(found.fournisseur);
       if (found.race) setRacePrevue(found.race);
     }
@@ -246,22 +308,28 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     setNbCycles(4);
     setRotationsParLot(1);
     setGlobalVolumeMode('lot');
+    setCartonsUnique(DEFAULT_UNIQUE_CARTONS);
+    setUniqueNbCycles(4);
     setTauxEclosionPct(historicalHatchRate);
     setHasUserChangedScope(false);
     setHasUserEditedGlobalSelection(false);
     setHasUserChangedSingleMode(false);
+    setHasUserChangedUniqueMode(false);
     setPlanningScope(validAnchors.length >= 2 ? 'global' : 'single');
     setSelectedGlobalIds(defaultGlobalLotIds);
+    setUniqueStartMode(transitionLots.length > 0 ? 'transition' : 'custom');
 
     if (defaultSingleAnchor) {
       setAnchorMode('lot');
       setSelectedAnchorId(defaultSingleAnchor.id);
+      setUniqueSelectedLotId(defaultSingleAnchor.id);
       setCartonsParLot(Math.max(MIN_CARTONS_LOT, defaultSingleAnchor.cartons || MIN_CARTONS_LOT));
       setFournisseurPrevu(defaultSingleAnchor.fournisseur || 'Pak tavuk');
       setRacePrevue(defaultSingleAnchor.race || 'Ross 308');
     } else {
       setAnchorMode('custom');
       setCustomStartDate(toIsoInput(addDays(today, 1)));
+      setUniqueCustomDate(toIsoInput(addDays(today, 1)));
       setCartonsParLot(MIN_CARTONS_LOT);
     }
   };
@@ -362,7 +430,74 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
       return rows.map((row, idx) => ({ ...row, orderIndex: idx + 1 }));
     }
 
-    // Mode 'single' : Point de départ du Cycle 1 (1 lot ou date manuelle)
+    if (planningScope === 'unique') {
+      let firstIncubDate: Date;
+      let firstOriginLabel: string;
+
+      if (uniqueStartMode === 'transition' && lastTransitionLot?.dateMirage) {
+        firstIncubDate = addDays(lastTransitionLot.dateMirage, battementApresMirage);
+        firstOriginLabel =
+          transitionLots.length > 1
+            ? `Libération totale (${transitionLots.length} lots · dernier mirage ${lastTransitionLot.id} le ${formatFr(lastTransitionLot.dateMirage)})`
+            : `Libération totale après mirage ${lastTransitionLot.id} (${formatFr(lastTransitionLot.dateMirage)})`;
+      } else if (uniqueStartMode === 'lot' && uniqueAnchorObj?.dateMirage) {
+        firstIncubDate = addDays(uniqueAnchorObj.dateMirage, battementApresMirage);
+        firstOriginLabel = `Après mirage ${uniqueAnchorObj.id} (${formatFr(uniqueAnchorObj.dateMirage)})`;
+      } else {
+        const parsed = uniqueCustomDate ? new Date(`${uniqueCustomDate}T00:00:00`) : addDays(today, 1);
+        firstIncubDate = isNaN(parsed.getTime()) ? addDays(today, 1) : parsed;
+        firstOriginLabel = 'Démarrage chargement unique (date manuelle)';
+      }
+
+      const safeUniqueCartons = Math.max(MIN_CARTONS_LOT, Number(cartonsUnique) || DEFAULT_UNIQUE_CARTONS);
+      const rows: PlannedOrderRow[] = [];
+      let currentIncub = firstIncubDate;
+      let currentOrigin = firstOriginLabel;
+
+      for (let i = 1; i <= uniqueNbCycles; i++) {
+        const dateIncubation = currentIncub;
+        const dateCommande = addDays(dateIncubation, -safeDelai);
+        const dateReception = addDays(dateIncubation, -1);
+        const dateMirage = addDays(dateIncubation, 18);
+        const dateEclosion = addDays(dateIncubation, 21);
+        const joursAvantCommande = diffDays(dateCommande, today);
+
+        const oeufs = safeUniqueCartons * 360;
+        const poussinsEstimes = Math.round((oeufs * safeTaux) / 100);
+
+        rows.push({
+          rowKey: `unique-cycle-${i}`,
+          orderIndex: i,
+          sourceLotId:
+            uniqueStartMode === 'transition'
+              ? lastTransitionLot?.id || null
+              : uniqueStartMode === 'lot'
+                ? uniqueAnchorObj?.id || null
+                : null,
+          rotationNum: i,
+          origineLabel: currentOrigin,
+          dateCommande,
+          dateReception,
+          dateIncubation,
+          dateMirage,
+          dateEclosion,
+          joursAvantCommande,
+          urgence: buildUrgence(joursAvantCommande),
+          cartons: safeUniqueCartons,
+          oeufs,
+          poussinsEstimes,
+          fournisseur: fournisseurPrevu,
+          race: racePrevue,
+        });
+
+        currentIncub = addDays(dateMirage, battementApresMirage);
+        currentOrigin = `Après mirage Cycle unique #${i} (${formatFr(dateMirage)})`;
+      }
+
+      return rows;
+    }
+
+    // Mode 'single' : Point de départ du Cycle 1 (rechargement multiple sur 1 lot ou date manuelle)
     let firstIncubDate: Date;
     let firstOriginLabel: string;
 
@@ -422,6 +557,13 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     selectedGlobalLots,
     rotationsParLot,
     globalVolumeMode,
+    uniqueStartMode,
+    lastTransitionLot,
+    transitionLots.length,
+    uniqueAnchorObj,
+    uniqueCustomDate,
+    cartonsUnique,
+    uniqueNbCycles,
     anchorMode,
     activeAnchorObj,
     battementApresMirage,
@@ -482,6 +624,14 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
       selectedGlobalLots.forEach((l) => {
         if (l.dateIncub) candidateStartDates.push(l.dateIncub);
       });
+    } else if (planningScope === 'unique') {
+      if (uniqueStartMode === 'transition') {
+        transitionLots.forEach((l) => {
+          if (l.dateIncub) candidateStartDates.push(l.dateIncub);
+        });
+      } else if (uniqueStartMode === 'lot' && uniqueAnchorObj?.dateIncub) {
+        candidateStartDates.push(uniqueAnchorObj.dateIncub);
+      }
     } else if (anchorMode === 'lot' && activeAnchorObj?.dateIncub) {
       candidateStartDates.push(activeAnchorObj.dateIncub);
     }
@@ -503,6 +653,23 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
       return { minDate, maxDate, totalDays, todayPct, mode: 'global' as const, lanes };
     }
 
+    if (planningScope === 'unique') {
+      return {
+        minDate,
+        maxDate,
+        totalDays,
+        todayPct,
+        mode: 'unique' as const,
+        transitionLots: uniqueStartMode === 'transition' ? transitionLots : [],
+        showAnchorLot: Boolean(
+          uniqueStartMode === 'lot' &&
+            uniqueAnchorObj?.dateIncub &&
+            uniqueAnchorObj?.dateMirage &&
+            uniqueAnchorObj?.dateEclo
+        ),
+      };
+    }
+
     return {
       minDate,
       maxDate,
@@ -511,7 +678,17 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
       mode: 'single' as const,
       showAnchorLot: Boolean(anchorMode === 'lot' && activeAnchorObj?.dateIncub && activeAnchorObj?.dateMirage && activeAnchorObj?.dateEclo),
     };
-  }, [plannedRows, planningScope, selectedGlobalLots, anchorMode, activeAnchorObj, today]);
+  }, [
+    plannedRows,
+    planningScope,
+    selectedGlobalLots,
+    uniqueStartMode,
+    transitionLots,
+    uniqueAnchorObj,
+    anchorMode,
+    activeAnchorObj,
+    today,
+  ]);
 
   const exportCsv = () => {
     const headers = [
@@ -533,9 +710,17 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     ];
     const rows = plannedRows.map((r) => [
       `#${r.orderIndex}`,
-      planningScope === 'global' ? 'Vision globale lots en cours' : 'Projection Cycle 1',
+      planningScope === 'unique'
+        ? `Chargement unique (${Math.max(MIN_CARTONS_LOT, Number(cartonsUnique) || DEFAULT_UNIQUE_CARTONS)} cartons)`
+        : planningScope === 'global'
+          ? 'Rechargement multiple - Vision globale'
+          : 'Rechargement multiple - Cycle 1',
       r.sourceLotId || 'Ligne manuelle',
-      planningScope === 'global' ? `Relève #${r.rotationNum}` : `Cycle ${r.rotationNum}`,
+      planningScope === 'unique'
+        ? `Cycle unique #${r.rotationNum}`
+        : planningScope === 'global'
+          ? `Relève #${r.rotationNum}`
+          : `Cycle ${r.rotationNum}`,
       r.origineLabel,
       formatFr(r.dateCommande),
       formatFr(r.dateReception),
@@ -557,9 +742,38 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `calendrier_approvisionnement_incubation_${toIsoInput(today)}.csv`;
+    a.download = `calendrier_approvisionnement_incubation_${planningScope === 'unique' ? 'chargement_unique_' : ''}${toIsoInput(today)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadPdf = () => {
+    if (plannedRows.length === 0 || pdfGenerating) return;
+    setPdfGenerating(true);
+    try {
+      downloadPlanningPdf({
+        planningScope,
+        today,
+        delaiCommandeJours,
+        battementApresMirage,
+        tauxEclosionPct,
+        minCartonsLot: MIN_CARTONS_LOT,
+        cartonsUnique: Math.max(MIN_CARTONS_LOT, Number(cartonsUnique) || DEFAULT_UNIQUE_CARTONS),
+        selectedGlobalLots,
+        activeAnchorObj: planningScope === 'unique' ? uniqueAnchorObj : activeAnchorObj,
+        anchorMode:
+          planningScope === 'unique'
+            ? uniqueStartMode === 'lot'
+              ? 'lot'
+              : 'custom'
+            : anchorMode,
+        rows: plannedRows,
+        summary,
+        timelineData,
+      });
+    } finally {
+      setTimeout(() => setPdfGenerating(false), 300);
+    }
   };
 
   const renderUrgencyLabel = (r: PlannedOrderRow) => {
@@ -616,19 +830,19 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => window.print()}
-            disabled={plannedRows.length === 0}
+            onClick={handleDownloadPdf}
+            disabled={plannedRows.length === 0 || pdfGenerating}
             className="px-3.5 py-2 rounded-lg text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
-            <Printer className="w-3.5 h-3.5" />
-            <span>Imprimer le planning</span>
+            <FileDown className="w-3.5 h-3.5" />
+            <span>{pdfGenerating ? 'Génération PDF...' : 'Télécharger le planning en PDF'}</span>
           </button>
         </div>
       </div>
 
       {/* Panneau de paramétrage du planning */}
       <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4 print:hidden">
-        {/* Sélecteur de mode : Vision globale vs Point de départ Cycle 1 */}
+        {/* Sélecteur de mode : Rechargement multiple (Global / Cycle 1) vs Chargement unique (160 cartons) */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-slate-200">
           <div className="inline-flex flex-wrap items-center gap-1 bg-white border border-slate-300 p-1 rounded-lg">
             <button
@@ -644,7 +858,7 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
-              <span>Vision globale — Lots en cours ({validAnchors.length})</span>
+              <span>Rechargement multiple · Vision globale ({validAnchors.length})</span>
             </button>
 
             <button
@@ -660,7 +874,23 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
               }`}
             >
               <GitCommitHorizontal className="w-3.5 h-3.5" />
-              <span>Point de départ du Cycle 1 (1 lot ou date)</span>
+              <span>Rechargement multiple · Cycle 1</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setHasUserChangedScope(true);
+                setPlanningScope('unique');
+              }}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                planningScope === 'unique'
+                  ? 'bg-sky-700 text-white'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <Box className="w-3.5 h-3.5" />
+              <span>Chargement unique · {DEFAULT_UNIQUE_CARTONS} cartons</span>
             </button>
           </div>
 
@@ -929,6 +1159,225 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
               </div>
             )}
           </div>
+        ) : planningScope === 'unique' ? (
+          /* Mode 'unique' : Chargement unique d'un incubateur complet (160 cartons) + gestion du cycle de transition */
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Déclencheur du cycle en changement */}
+              <div className="lg:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Départ du chargement unique (cycle en changement)
+                </label>
+                <select
+                  value={
+                    uniqueStartMode === 'transition'
+                      ? '__transition__'
+                      : uniqueStartMode === 'custom'
+                        ? '__custom__'
+                        : uniqueSelectedLotId
+                  }
+                  onChange={(e) => handleSelectUniqueStart(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-600"
+                >
+                  {transitionLots.length > 0 && lastTransitionLot?.dateMirage && (
+                    <option value="__transition__">
+                      Libération totale incubateur ({transitionLots.length} lot{transitionLots.length > 1 ? 's' : ''} en cours · dernier mirage {lastTransitionLot.id} le {formatFr(lastTransitionLot.dateMirage)} → Libre le {formatFr(addDays(lastTransitionLot.dateMirage, battementApresMirage))})
+                    </option>
+                  )}
+                  {validAnchors.map((a) => {
+                    const libre = addDays(a.dateMirage!, battementApresMirage);
+                    return (
+                      <option key={a.id} value={a.id}>
+                        Après mirage {a.id} ({formatFr(a.dateMirage!)}) → Libre le {formatFr(libre)}
+                      </option>
+                    );
+                  })}
+                  <option value="__custom__">Choisir une date de chargement unique personnalisée</option>
+                </select>
+
+                {uniqueStartMode === 'transition' && transitionLots.length > 0 && lastTransitionLot?.dateMirage && (
+                  <div className="mt-2 bg-white border border-slate-200 rounded-lg px-3 py-2 text-[11px] text-slate-700 leading-relaxed tabular-nums">
+                    <strong className="text-slate-900">Cycle de transition :</strong> fin des {transitionLots.length} lots en cours (
+                    {transitionLots.map((l) => `${l.id} mirage ${formatShortFr(l.dateMirage!)}`).join(' · ')}) sans rechargement partiel, pour charger{' '}
+                    <strong className="text-sky-800">{Math.max(MIN_CARTONS_LOT, cartonsUnique)} cartons</strong> d&apos;un seul bloc le{' '}
+                    <strong className="text-slate-900">{formatFr(addDays(lastTransitionLot.dateMirage, battementApresMirage))}</strong>.
+                  </div>
+                )}
+
+                {uniqueStartMode === 'custom' && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <input
+                      type="date"
+                      value={uniqueCustomDate}
+                      onChange={(e) => setUniqueCustomDate(e.target.value)}
+                      className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-600"
+                    />
+                    <span className="text-[11px] text-slate-500">Date souhaitée du chargement unique (J0)</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Délai commande œufs */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Délai commande œufs (avant J0)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={45}
+                    value={delaiCommandeJours}
+                    onChange={(e) => setDelaiCommandeJours(Math.max(1, Math.min(45, Number(e.target.value) || 1)))}
+                    className="w-20 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-sky-600"
+                  />
+                  <span className="text-xs text-slate-600 font-medium">j</span>
+                  <div className="flex items-center gap-1 ml-auto">
+                    {[5, 7, 10, 14].map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setDelaiCommandeJours(d)}
+                        className={`px-2 py-1 rounded text-[11px] font-semibold transition cursor-pointer ${
+                          delaiCommandeJours === d
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        {d}j
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Cycles complets à programmer */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Cycles complets à programmer
+                </label>
+                <div className="grid grid-cols-4 gap-1 bg-white border border-slate-300 rounded-lg p-1">
+                  {[2, 3, 4, 6].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setUniqueNbCycles(n)}
+                      className={`py-1.5 rounded text-xs font-bold transition cursor-pointer tabular-nums ${
+                        uniqueNbCycles === n
+                          ? 'bg-sky-700 text-white'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Ligne 2 paramètres : Volume unique (160 ctn), Fournisseur, Race, Taux, Reprise */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-3 border-t border-slate-200">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Cartons / lot complet
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={MIN_CARTONS_LOT}
+                    max={500}
+                    value={cartonsUnique}
+                    onChange={(e) => setCartonsUnique(Number(e.target.value) || 0)}
+                    onBlur={() => setCartonsUnique((v) => Math.max(MIN_CARTONS_LOT, Number(v) || DEFAULT_UNIQUE_CARTONS))}
+                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-sky-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCartonsUnique(160)}
+                    className={`px-2 py-1.5 rounded-lg text-[11px] font-bold shrink-0 cursor-pointer border transition ${
+                      cartonsUnique === 160
+                        ? 'bg-sky-700 text-white border-sky-700'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    160
+                  </button>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                  {(Math.max(MIN_CARTONS_LOT, cartonsUnique) * 360).toLocaleString('fr-FR')} œufs · 1 chargement
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Fournisseur prévu
+                </label>
+                <select
+                  value={fournisseurPrevu}
+                  onChange={(e) => setFournisseurPrevu(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-600"
+                >
+                  {fournisseurOptions.map((f) => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Souche / Race
+                </label>
+                <select
+                  value={racePrevue}
+                  onChange={(e) => setRacePrevue(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-600"
+                >
+                  {raceOptions.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Taux d&apos;éclosion estimé
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={40}
+                    max={98}
+                    value={tauxEclosionPct}
+                    onChange={(e) => setTauxEclosionPct(Math.max(40, Math.min(98, Number(e.target.value) || 78)))}
+                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-sky-600"
+                  />
+                  <span className="text-xs font-bold text-slate-600">%</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                  Moy. couvoir : {historicalHatchRate}%
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Reprise après mirage
+                </label>
+                <select
+                  value={battementApresMirage}
+                  onChange={(e) => setBattementApresMirage(Number(e.target.value))}
+                  className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-600"
+                >
+                  <option value={1}>Lendemain du mirage (J+1)</option>
+                  <option value={2}>Surlendemain (J+2 · nettoyage)</option>
+                  <option value={3}>Sous 3 jours (J+3 · à éclosion)</option>
+                </select>
+                <div className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                  Cadence : 1 lot complet / {summary.cadenceJours} j
+                </div>
+              </div>
+            </div>
+          </div>
         ) : (
           /* Mode 'single' : Point de départ du Cycle 1 (maintenu à l'identique) */
           <div className="space-y-4">
@@ -1143,8 +1592,12 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
             </div>
             <div className="text-xs mt-1 truncate">
               {renderUrgencyLabel(summary.firstCmd)}
-              {summary.firstCmd.sourceLotId && (
-                <span className="text-slate-500 font-medium"> · relève {summary.firstCmd.sourceLotId}</span>
+              {planningScope === 'unique' ? (
+                <span className="text-sky-800 font-semibold"> · {summary.firstCmd.cartons} ctn (lot complet)</span>
+              ) : (
+                summary.firstCmd.sourceLotId && (
+                  <span className="text-slate-500 font-medium"> · relève {summary.firstCmd.sourceLotId}</span>
+                )
               )}
             </div>
           </div>
@@ -1171,9 +1624,11 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
             </div>
             <div className="text-xs text-slate-600 mt-1 tabular-nums truncate">
               {summary.totalOeufs.toLocaleString('fr-FR')} œufs ·{' '}
-              {planningScope === 'global'
-                ? `${selectedGlobalLots.length} lot${selectedGlobalLots.length > 1 ? 's' : ''} suivi${selectedGlobalLots.length > 1 ? 's' : ''}`
-                : fournisseurPrevu}
+              {planningScope === 'unique'
+                ? 'Chargement unique (100%)'
+                : planningScope === 'global'
+                  ? `${selectedGlobalLots.length} lot${selectedGlobalLots.length > 1 ? 's' : ''} suivi${selectedGlobalLots.length > 1 ? 's' : ''}`
+                  : fournisseurPrevu}
             </div>
           </div>
 
@@ -1183,7 +1638,7 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
               {summary.totalPoussins.toLocaleString('fr-FR')} poussins
             </div>
             <div className="text-xs text-slate-600 mt-1 tabular-nums">
-              Base {tauxEclosionPct}% · cadence {summary.cadenceJours} jours / ligne
+              Base {tauxEclosionPct}% · cadence {summary.cadenceJours} j / {planningScope === 'unique' ? 'cycle complet' : 'ligne'}
             </div>
           </div>
         </div>
@@ -1196,6 +1651,11 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
             <div>
               <h3 className="text-sm font-bold text-slate-900">
                 Calendrier prévisionnel d&apos;approvisionnement
+                {planningScope === 'unique' && (
+                  <span className="text-sky-800 font-semibold ml-1.5">
+                    — Chargement unique ({Math.max(MIN_CARTONS_LOT, Number(cartonsUnique) || DEFAULT_UNIQUE_CARTONS)} cartons / lot complet)
+                  </span>
+                )}
                 {planningScope === 'global' && (
                   <span className="text-slate-500 font-semibold ml-1.5">
                     — consolidé sur {selectedGlobalLots.length} lot{selectedGlobalLots.length > 1 ? 's' : ''} en cours
@@ -1203,9 +1663,11 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
                 )}
               </h3>
               <p className="text-xs text-slate-500">
-                {planningScope === 'global'
-                  ? 'Toutes les commandes à passer classées par ordre chronologique dès libération de chaque incubateur (J+18)'
-                  : 'Dates calculées pour enchaîner les lots dès la libération de l\'incubateur après mirage (J+18)'}
+                {planningScope === 'unique'
+                  ? 'Chargement complet de l\'incubateur en un seul lot dès sa libération totale après mirage (J+18)'
+                  : planningScope === 'global'
+                    ? 'Toutes les commandes à passer classées par ordre chronologique dès libération de chaque incubateur (J+18)'
+                    : 'Dates calculées pour enchaîner les lots dès la libération de l\'incubateur après mirage (J+18)'}
               </p>
             </div>
             {summary.urgentCount > 0 && (
@@ -1220,7 +1682,7 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
               <thead className="bg-slate-50/70 border-b border-slate-200 text-slate-600 font-bold">
                 <tr>
                   <th className="px-4 py-3 whitespace-nowrap">
-                    {planningScope === 'global' ? 'Ordre / Lot' : 'Cycle'}
+                    {planningScope === 'unique' ? 'Cycle complet' : planningScope === 'global' ? 'Ordre / Lot' : 'Cycle'}
                   </th>
                   <th className="px-4 py-3 whitespace-nowrap">Déclencheur (Libération)</th>
                   <th className="px-4 py-3 whitespace-nowrap">Commande œufs (J-{delaiCommandeJours})</th>
@@ -1245,12 +1707,18 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
                     <tr key={r.rowKey} className={`transition-colors ${rowHighlight}`}>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="font-extrabold text-slate-900 tabular-nums">
-                          {planningScope === 'global'
-                            ? `Cmd #${r.orderIndex} · ${r.sourceLotId}`
-                            : `Cycle ${r.rotationNum}`}
+                          {planningScope === 'unique'
+                            ? `Cycle unique #${r.rotationNum}`
+                            : planningScope === 'global'
+                              ? `Cmd #${r.orderIndex} · ${r.sourceLotId}`
+                              : `Cycle ${r.rotationNum}`}
                         </div>
                         <div className="text-[11px] text-slate-500">
-                          {planningScope === 'global' ? `Relève #${r.rotationNum} · ` : ''}
+                          {planningScope === 'unique'
+                            ? `${r.cartons} ctn (100%) · `
+                            : planningScope === 'global'
+                              ? `Relève #${r.rotationNum} · `
+                              : ''}
                           {r.race} · {r.fournisseur}
                         </div>
                       </td>
@@ -1448,45 +1916,84 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
               ))
             ) : (
               <>
-                {timelineData.showAnchorLot && activeAnchorObj && (
-                  <div className="grid grid-cols-12 items-center gap-3 text-xs">
-                    <div className="col-span-4 sm:col-span-3 truncate font-semibold text-slate-700">
-                      {activeAnchorObj.id} <span className="text-slate-400 font-normal">· en cours</span>
-                    </div>
-                    <div className="col-span-8 sm:col-span-9 relative h-6 bg-slate-100 rounded overflow-hidden">
-                      {timelineData.todayPct !== null && (
-                        <div
-                          className="absolute top-0 bottom-0 w-px bg-rose-500/80 z-10 pointer-events-none"
-                          style={{ left: `${timelineData.todayPct}%` }}
-                        />
-                      )}
-                      {(() => {
-                        const startOffset = Math.max(0, diffDays(activeAnchorObj.dateIncub!, timelineData.minDate));
-                        const mirOffset = diffDays(activeAnchorObj.dateMirage!, timelineData.minDate);
-                        const ecloOffset = diffDays(activeAnchorObj.dateEclo!, timelineData.minDate);
-                        const leftPct = (startOffset / timelineData.totalDays) * 100;
-                        const incubWidth = Math.max(2, ((mirOffset - startOffset) / timelineData.totalDays) * 100);
-                        const hatchWidth = Math.max(1.5, ((ecloOffset - mirOffset) / timelineData.totalDays) * 100);
-                        return (
-                          <>
+                {timelineData.mode === 'unique' &&
+                  timelineData.transitionLots &&
+                  timelineData.transitionLots.map((lot) => {
+                    if (!lot.dateIncub || !lot.dateMirage || !lot.dateEclo) return null;
+                    const startOffset = Math.max(0, diffDays(lot.dateIncub, timelineData.minDate));
+                    const mirOffset = diffDays(lot.dateMirage, timelineData.minDate);
+                    const ecloOffset = diffDays(lot.dateEclo, timelineData.minDate);
+                    const leftPct = (startOffset / timelineData.totalDays) * 100;
+                    const incubWidth = Math.max(2, ((mirOffset - startOffset) / timelineData.totalDays) * 100);
+                    const hatchWidth = Math.max(1.5, ((ecloOffset - mirOffset) / timelineData.totalDays) * 100);
+
+                    return (
+                      <div key={lot.id} className="grid grid-cols-12 items-center gap-3 text-xs">
+                        <div className="col-span-4 sm:col-span-3 truncate font-semibold text-slate-600">
+                          {lot.id} <span className="text-slate-400 font-normal">· fin cycle ({lot.cartons} ctn)</span>
+                        </div>
+                        <div className="col-span-8 sm:col-span-9 relative h-6 bg-slate-100 rounded overflow-hidden">
+                          {timelineData.todayPct !== null && (
                             <div
-                              className="absolute top-1 bottom-1 bg-sky-600/80 rounded-l text-[10px] text-white font-semibold flex items-center px-1.5 truncate"
-                              style={{ left: `${leftPct}%`, width: `${incubWidth}%` }}
-                              title={`Incubation : ${formatFr(activeAnchorObj.dateIncub!)} → Mirage ${formatFr(activeAnchorObj.dateMirage!)}`}
-                            >
-                              J0 → Mirage {formatShortFr(activeAnchorObj.dateMirage!)}
-                            </div>
-                            <div
-                              className="absolute top-1 bottom-1 bg-emerald-600/80 rounded-r"
-                              style={{ left: `${leftPct + incubWidth}%`, width: `${hatchWidth}%` }}
-                              title={`Éclosoir : ${formatFr(activeAnchorObj.dateMirage!)} → ${formatFr(activeAnchorObj.dateEclo!)}`}
+                              className="absolute top-0 bottom-0 w-px bg-rose-500/80 z-10 pointer-events-none"
+                              style={{ left: `${timelineData.todayPct}%` }}
                             />
-                          </>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
+                          )}
+                          <div
+                            className="absolute top-1 bottom-1 bg-slate-500/80 rounded-l text-[10px] text-white font-semibold flex items-center px-1.5 truncate tabular-nums"
+                            style={{ left: `${leftPct}%`, width: `${incubWidth}%` }}
+                            title={`Transition (${lot.id}) : ${formatFr(lot.dateIncub)} → Mirage ${formatFr(lot.dateMirage)}`}
+                          >
+                            Transition → M {formatShortFr(lot.dateMirage)}
+                          </div>
+                          <div
+                            className="absolute top-1 bottom-1 bg-emerald-600/70 rounded-r"
+                            style={{ left: `${leftPct + incubWidth}%`, width: `${hatchWidth}%` }}
+                            title={`Éclosoir (${lot.id}) : ${formatFr(lot.dateMirage)} → ${formatFr(lot.dateEclo)}`}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                {timelineData.showAnchorLot &&
+                  (planningScope === 'unique' ? uniqueAnchorObj : activeAnchorObj) && (() => {
+                    const anchor = (planningScope === 'unique' ? uniqueAnchorObj : activeAnchorObj)!;
+                    if (!anchor.dateIncub || !anchor.dateMirage || !anchor.dateEclo) return null;
+                    const startOffset = Math.max(0, diffDays(anchor.dateIncub, timelineData.minDate));
+                    const mirOffset = diffDays(anchor.dateMirage, timelineData.minDate);
+                    const ecloOffset = diffDays(anchor.dateEclo, timelineData.minDate);
+                    const leftPct = (startOffset / timelineData.totalDays) * 100;
+                    const incubWidth = Math.max(2, ((mirOffset - startOffset) / timelineData.totalDays) * 100);
+                    const hatchWidth = Math.max(1.5, ((ecloOffset - mirOffset) / timelineData.totalDays) * 100);
+                    return (
+                      <div className="grid grid-cols-12 items-center gap-3 text-xs">
+                        <div className="col-span-4 sm:col-span-3 truncate font-semibold text-slate-700">
+                          {anchor.id} <span className="text-slate-400 font-normal">· en cours</span>
+                        </div>
+                        <div className="col-span-8 sm:col-span-9 relative h-6 bg-slate-100 rounded overflow-hidden">
+                          {timelineData.todayPct !== null && (
+                            <div
+                              className="absolute top-0 bottom-0 w-px bg-rose-500/80 z-10 pointer-events-none"
+                              style={{ left: `${timelineData.todayPct}%` }}
+                            />
+                          )}
+                          <div
+                            className="absolute top-1 bottom-1 bg-sky-600/80 rounded-l text-[10px] text-white font-semibold flex items-center px-1.5 truncate"
+                            style={{ left: `${leftPct}%`, width: `${incubWidth}%` }}
+                            title={`Incubation : ${formatFr(anchor.dateIncub)} → Mirage ${formatFr(anchor.dateMirage)}`}
+                          >
+                            J0 → Mirage {formatShortFr(anchor.dateMirage)}
+                          </div>
+                          <div
+                            className="absolute top-1 bottom-1 bg-emerald-600/80 rounded-r"
+                            style={{ left: `${leftPct + incubWidth}%`, width: `${hatchWidth}%` }}
+                            title={`Éclosoir : ${formatFr(anchor.dateMirage)} → ${formatFr(anchor.dateEclo)}`}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                 {plannedRows.map((c) => {
                   const startOffset = Math.max(0, diffDays(c.dateIncubation, timelineData.minDate));
@@ -1499,7 +2006,9 @@ export const IncubationPlanner: React.FC<IncubationPlannerProps> = ({
                   return (
                     <div key={c.rowKey} className="grid grid-cols-12 items-center gap-3 text-xs">
                       <div className="col-span-4 sm:col-span-3 truncate">
-                        <span className="font-bold text-slate-900">Cycle {c.rotationNum}</span>
+                        <span className="font-bold text-slate-900">
+                          {planningScope === 'unique' ? `Unique #${c.rotationNum} (${c.cartons} ctn)` : `Cycle ${c.rotationNum}`}
+                        </span>
                         <span className="text-slate-500 ml-1.5 tabular-nums">· Cde {formatShortFr(c.dateCommande)}</span>
                       </div>
                       <div className="col-span-8 sm:col-span-9 relative h-6 bg-slate-100 rounded overflow-hidden">
