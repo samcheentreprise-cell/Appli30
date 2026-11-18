@@ -199,7 +199,31 @@ export async function getFParamData(force = false): Promise<{
   if (_fparamCache && !force) return _fparamCache;
   const result = await callApi('fparam.get');
   if (result?.success && result?.data) {
-    _fparamCache = result.data;
+    const raw = result.data;
+    const cleanList = (arr: any): string[] =>
+      Array.isArray(arr)
+        ? Array.from(new Set(arr.map((x: any) => String(x ?? '').trim()).filter(Boolean)))
+        : [];
+    const normFournisseurs = cleanList(
+      raw.fournisseursOac?.length ? raw.fournisseursOac :
+      raw.fornecedoresOac?.length ? raw.fornecedoresOac :
+      raw.fournisseurs?.length ? raw.fournisseurs :
+      raw.fornecedores
+    );
+    const normRaces = cleanList(raw.racesOac?.length ? raw.racesOac : raw.races);
+    const normTypesOac = cleanList(raw.typesOAC?.length ? raw.typesOAC : raw.typesProduits);
+
+    _fparamCache = {
+      ...raw,
+      produitsPrix: raw.produitsPrix || {},
+      sourcesPaiement: cleanList(raw.sourcesPaiement),
+      typesProduits: cleanList(raw.typesProduits),
+      typesOAC: normTypesOac,
+      races: normRaces,
+      racesOac: normRaces,
+      fournisseurs: normFournisseurs,
+      fournisseursOac: normFournisseurs,
+    };
     return _fparamCache;
   }
   return {
@@ -231,9 +255,9 @@ export async function getOacConfig(force = false): Promise<{
 }> {
   const result = await getFParamData(force);
   return {
-    races: result.races || result.racesOac || [],
-    fournisseurs: result.fournisseurs || result.fournisseursOac || [],
-    typesOac: result.typesOAC || result.typesProduits || [],
+    races: result.racesOac?.length ? result.racesOac : result.races || [],
+    fournisseurs: result.fournisseursOac?.length ? result.fournisseursOac : result.fournisseurs || [],
+    typesOac: result.typesOAC?.length ? result.typesOAC : result.typesProduits || [],
   };
 }
 

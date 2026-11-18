@@ -230,14 +230,18 @@ export const OACModule: React.FC<OACModuleProps> = ({
     fournisseurs: string[];
   }>({ typesOac: [], races: [], fournisseurs: [] });
 
+  const applyFParam = (fp: any) => {
+    setOacConfig({
+      typesOac: fp.typesOAC?.length > 0 ? fp.typesOAC : TYPES_OAC,
+      races: fp.racesOac?.length > 0 ? fp.racesOac : (fp.races?.length > 0 ? fp.races : RACES_OAC),
+      fournisseurs: fp.fournisseursOac?.length > 0 ? fp.fournisseursOac : (fp.fournisseurs?.length > 0 ? fp.fournisseurs : FOURNISSEURS_OAC),
+    });
+  };
+
   useEffect(() => {
     (async () => {
       const fp = await getFParamData();
-      setOacConfig({
-        typesOac: fp.typesOAC?.length > 0 ? fp.typesOAC : ['Chairs'],
-        races: fp.racesOac?.length > 0 ? fp.racesOac : ['Ross 308'],
-        fournisseurs: fp.fournisseursOac?.length > 0 ? fp.fournisseursOac : ['Pak tavuk'],
-      });
+      applyFParam(fp);
       console.log('[OAC] F-Param chargé:', fp);
     })();
   }, []);
@@ -364,56 +368,61 @@ export const OACModule: React.FC<OACModuleProps> = ({
       });
   }, [soumissions, soumissionFilter, soumissionSearch]);
 
-  const existingOacIdSet = useMemo(() => new Set(oacList.map((o) => String(o.id || '').trim()).filter(Boolean)), [oacList]);
+  const isAchatOacSubCat = (subCat?: string): boolean => {
+    const lower = String(subCat || '').toLowerCase().trim();
+    return (
+      lower.includes("achat d'oeuf") ||
+      lower.includes("achat d'œuf") ||
+      lower.includes('achat oeuf') ||
+      lower.includes('achat œuf')
+    );
+  };
 
+  const existingOacIdSet = useMemo(
+    () => new Set(oacList.map((o) => String(o.id || '').trim().toUpperCase()).filter(Boolean)),
+    [oacList]
+  );
+
+  // Feuille "Depenses", colonne H (idCommande) à partir de la ligne 16 :
+  // - Sous-catégorie = "Achat d'œufs à couver" uniquement
+  // - Exclut les IDs déjà présents dans "Gestions OAC"
+  // - Trie du plus récent au plus ancien et limite aux 4 plus récentes avec leur libellé
   const unusedDepenseOacIds = useMemo(() => {
-    const map = new Map<string, string>();
-    depenses
-      .filter((d) => d.sousCategorie === "Achat d'œufs à couver" && d.idCommande)
-      .forEach((d) => {
-        const id = String(d.idCommande || '').trim();
-        if (id && !existingOacIdSet.has(id) && !map.has(id)) {
-          map.set(id, d.date || '');
-        }
+    const items: { id: string; date: string; libelle: string; montant: number; ligne: number; sortMs: number }[] = [];
+    depenses.forEach((d) => {
+      if (d.ligne !== undefined && Number(d.ligne) < 16) return;
+      if (!isAchatOacSubCat(d.sousCategorie)) return;
+      const id = String(d.idCommande || '').trim();
+      if (!id) return;
+      if (existingOacIdSet.has(id.toUpperCase())) return;
+      const sortMs = Number(d.dateMs) || parseFrDateMs(d.date);
+      items.push({
+        id,
+        date: d.date || '',
+        libelle: String(d.libelle || '').trim(),
+        montant: Number(d.montant) || 0,
+        ligne: Number(d.ligne) || 0,
+        sortMs,
       });
-    return Array.from(map.entries())
-      .map(([id, date]) => ({ id, date }))
-      .sort((a, b) => parseFrDateMs(b.date) - parseFrDateMs(a.date));
-  }, [depenses, existingOacIdSet]);
-
-  const nextAutoOacId = useMemo(() => {
-    const now = new Date();
-    const yy = String(now.getFullYear()).slice(-2);
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    let seq = oacList.length + 1;
-    let candidate = `OAC-${yy}${mm}-${String(seq).padStart(3, '0')}`;
-    while (existingOacIdSet.has(candidate)) {
-      seq++;
-      candidate = `OAC-${yy}${mm}-${String(seq).padStart(3, '0')}`;
-    }
-    return candidate;
-  }, [oacList.length, existingOacIdSet]);
-
-  const recentOacList = useMemo(() => {
-    const oacIdsFromDepenses = depenses
-      .filter((d) => d.sousCategorie === "Achat d'œufs à couver" && d.idCommande)
-      .map((d) => ({ id: String(d.idCommande!), date: d.date || '' }));
-
-    const oacIdsFromOacList = oacList.map((o) => ({ id: String(o.id || ''), date: o.date || '' })).filter((x) => x.id);
-
-    const allIds = [...oacIdsFromDepenses, ...oacIdsFromOacList];
-    const uniqueIdsMap = new Map<string, string>();
-    allIds.forEach((item) => {
-      if (!uniqueIdsMap.has(item.id)) {
-        uniqueIdsMap.set(item.id, item.date);
-      }
     });
 
-    return Array.from(uniqueIdsMap.entries())
-      .map(([id, date]) => ({ id, date }))
-      .sort((a, b) => parseFrDateMs(b.date) - parseFrDateMs(a.date))
-      .slice(0, 10);
-  }, [oacList, depenses]);
+    items.sort((a, b) => {
+      if (b.sortMs !== a.sortMs) return b.sortMs - a.sortMs;
+      return b.ligne - a.ligne;
+    });
+
+    const deduped: typeof items = [];
+    const seen = new Set<string>();
+    for (const item of items) {
+      const key = item.id.toUpperCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(item);
+      }
+      if (deduped.length >= 4) break;
+    }
+    return deduped;
+  }, [depenses, existingOacIdSet]);
 
   // Selected IDs in tables
   const [selC, setSelC] = useState<string>('');
@@ -1065,13 +1074,30 @@ export const OACModule: React.FC<OACModuleProps> = ({
         initialData.dateIncubation = `${p[2]}-${p[1]}-${p[0]}`;
       }
     }
+    if (initialData.fournisseur && oacConfig.fournisseurs.length > 0) {
+      const matchedFourn = oacConfig.fournisseurs.find(
+        (f) => f.toLowerCase() === String(initialData.fournisseur).trim().toLowerCase()
+      );
+      if (matchedFourn) initialData.fournisseur = matchedFourn;
+    }
     setEditDonnees(initialData);
-    const defaultCommandeId = soumission.donnees?.id || unusedDepenseOacIds[0]?.id || nextAutoOacId;
+    const rawSubId = String(soumission.donnees?.id || '').trim();
+    const defaultCommandeId =
+      (rawSubId && !existingOacIdSet.has(rawSubId.toUpperCase()) ? rawSubId : '') ||
+      unusedDepenseOacIds[0]?.id ||
+      '';
     setApproveIdChoisi(defaultCommandeId);
     setApproveIdError(false);
     setShowRejectFormInModal(false);
     setModalRejectRaison('');
     setApproveModalOpen(true);
+
+    // Rafraîchit la liste F-Param (fournisseurs col. K, races, types) en arrière-plan
+    if (soumission.type === 'Commande') {
+      getFParamData(true).then((fp) => {
+        if (fp) applyFParam(fp);
+      }).catch(() => {});
+    }
   };
 
   const confirmApprove = async () => {
@@ -3278,38 +3304,32 @@ export const OACModule: React.FC<OACModuleProps> = ({
                   {sType === 'Commande' && (
                     <div className="space-y-3">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                          ID à attribuer (obligatoire) <span className="text-rose-600">*</span>
-                        </label>
-                        <div className="flex flex-col sm:flex-row gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                          <label className="text-xs font-bold text-slate-700">
+                            ID à attribuer (obligatoire) <span className="text-rose-600">*</span>
+                          </label>
+                          <span className="text-[11px] font-medium text-slate-500">
+                            4 dernières dépenses « Achat d&apos;œufs à couver » non attribuées
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_170px] gap-2">
                           <select
-                            value={approveIdChoisi}
+                            value={unusedDepenseOacIds.some((o) => o.id === approveIdChoisi) ? approveIdChoisi : ''}
                             onChange={(e) => {
                               setApproveIdChoisi(e.target.value);
                               setApproveIdError(false);
                             }}
-                            className={`flex-1 px-3 py-2 border rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] ${
+                            className={`w-full min-w-0 px-3 py-2 border rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2E86C1] truncate ${
                               approveIdChoisi ? 'border-emerald-500 bg-emerald-50/30' : 'border-slate-300'
                             }`}
                           >
                             <option value="">-- Choisir un ID --</option>
-                            <option value={nextAutoOacId}>
-                              {nextAutoOacId} — (Nouvel ID auto-généré)
-                            </option>
                             {unusedDepenseOacIds.map((o) => (
                               <option key={`dep-${o.id}`} value={o.id}>
-                                {o.id} — (Dépense OAC disponible{o.date ? ` • ${o.date}` : ''})
+                                {o.id} — {o.libelle || "Achat d'œufs à couver"}{o.date ? ` (${o.date})` : ''}
                               </option>
                             ))}
-                            {oacList.length > 0 && (
-                              <optgroup label="Lots OAC existants (attention : déjà enregistrés)">
-                                {oacList.slice(0, 10).map((o) => (
-                                  <option key={`oac-${o.id}`} value={o.id}>
-                                    {o.id} — (Déjà existant • {o.date})
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
                           </select>
                           <input
                             type="text"
@@ -3319,16 +3339,68 @@ export const OACModule: React.FC<OACModuleProps> = ({
                               setApproveIdChoisi(e.target.value);
                               setApproveIdError(false);
                             }}
-                            className="w-full sm:w-48 px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold font-mono focus:ring-2 focus:ring-emerald-500"
+                            className="w-full min-w-0 px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                           />
                         </div>
-                        {approveIdChoisi && existingOacIdSet.has(approveIdChoisi.trim()) && (
-                          <p className="text-[11px] text-amber-800 font-semibold mt-1 bg-amber-50 p-2 rounded-lg border border-amber-300">
-                            ⚠️ L'ID « {approveIdChoisi.trim()} » existe déjà dans la liste des OAC. Utilisez « {nextAutoOacId} » s'il s'agit d'un nouveau lot.
+
+                        {/* Liste lisible des 4 dépenses récentes disponibles avec libellé */}
+                        {unusedDepenseOacIds.length > 0 ? (
+                          <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/70 divide-y divide-slate-200 overflow-hidden">
+                            {unusedDepenseOacIds.map((o) => {
+                              const isSelected = approveIdChoisi.trim().toUpperCase() === o.id.toUpperCase();
+                              return (
+                                <button
+                                  key={`pick-${o.id}`}
+                                  type="button"
+                                  onClick={() => {
+                                    setApproveIdChoisi(o.id);
+                                    setApproveIdError(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-2 flex items-center justify-between gap-2 transition cursor-pointer ${
+                                    isSelected
+                                      ? 'bg-emerald-50 ring-1 ring-inset ring-emerald-500'
+                                      : 'hover:bg-white'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span
+                                      className={`px-2 py-0.5 rounded font-mono text-[11px] font-black shrink-0 ${
+                                        isSelected
+                                          ? 'bg-emerald-600 text-white'
+                                          : 'bg-slate-200 text-slate-800'
+                                      }`}
+                                    >
+                                      {o.id}
+                                    </span>
+                                    <span className="text-xs font-semibold text-slate-800 truncate">
+                                      {o.libelle || "Achat d'œufs à couver"}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0 text-[11px] text-slate-500 font-medium">
+                                    {o.montant > 0 && (
+                                      <span className="hidden sm:inline font-mono font-bold text-slate-700">
+                                        {o.montant.toLocaleString('fr-FR')} F
+                                      </span>
+                                    )}
+                                    {o.date && <span>{o.date}</span>}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-600 mt-1.5 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                            Aucune dépense « Achat d&apos;œufs à couver » en attente dans Dépenses (tous les IDs récents sont déjà enregistrés dans Gestions OAC). Saisissez un ID personnalisé ci-dessus si nécessaire.
+                          </p>
+                        )}
+
+                        {approveIdChoisi && existingOacIdSet.has(approveIdChoisi.trim().toUpperCase()) && (
+                          <p className="text-[11px] text-amber-800 font-semibold mt-1.5 bg-amber-50 p-2 rounded-lg border border-amber-300">
+                            ⚠️ L&apos;ID « {approveIdChoisi.trim()} » existe déjà dans la feuille Gestions OAC.
                           </p>
                         )}
                         {approveIdError && (
-                          <p className="text-xs text-rose-600 font-semibold mt-1 bg-rose-50 p-2 rounded-lg border border-rose-200">
+                          <p className="text-xs text-rose-600 font-semibold mt-1.5 bg-rose-50 p-2 rounded-lg border border-rose-200">
                             Veuillez sélectionner ou renseigner un ID.
                           </p>
                         )}
@@ -3369,13 +3441,18 @@ export const OACModule: React.FC<OACModuleProps> = ({
                           <div>
                             <label className="block text-[11px] font-black text-slate-800 uppercase mb-1">Fournisseur</label>
                             <select
-                              value={editDonnees.fournisseur || 'Pak tavuk'}
+                              value={editDonnees.fournisseur || (oacConfig.fournisseurs[0] || FOURNISSEURS_OAC[0])}
                               onChange={(e) => setEditDonnees({ ...editDonnees, fournisseur: e.target.value })}
                               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
                             >
-                              {(oacConfig.fournisseurs?.length > 0 ? oacConfig.fournisseurs : FOURNISSEURS_OAC).map((f) => (
-                                <option key={f} value={f}>{f}</option>
-                              ))}
+                              {(() => {
+                                const baseList = oacConfig.fournisseurs?.length > 0 ? oacConfig.fournisseurs : FOURNISSEURS_OAC;
+                                const cur = String(editDonnees.fournisseur || '').trim();
+                                const finalList = cur && !baseList.includes(cur) ? [cur, ...baseList] : baseList;
+                                return finalList.map((f) => (
+                                  <option key={f} value={f}>{f}</option>
+                                ));
+                              })()}
                             </select>
                           </div>
                         </div>

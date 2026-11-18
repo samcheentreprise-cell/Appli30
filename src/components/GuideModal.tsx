@@ -42,7 +42,7 @@ export const GuideModal: React.FC<GuideModalProps> = ({ isOpen, onClose }) => {
                 Guide d&apos;Utilisation Officiel — Couvoir SAMCHE
               </h2>
               <p className="text-[11px] text-sky-100 hidden sm:block">
-                Manuel illustré (Rôles, Cycle OAC, Validation, Livraisons, Ventes, Factures, Caisse &amp; Rentabilité)
+                Manuel illustré (Rôles, Calendrier &amp; Planification, Cycle OAC, Validation, Livraisons, Ventes, Factures, Dépenses, Caisse &amp; Rentabilité)
               </p>
             </div>
           </div>

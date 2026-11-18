@@ -4,14 +4,11 @@ export const TYPES_OAC = ['Chairs', 'Sasso', 'Fermier', 'Cou-nu'];
 export const RACES_OAC = ['Ross 308', 'Sasso', 'Cou-nu', 'Fermier', 'Cobb 500'];
 export const FOURNISSEURS_OAC = [
   'Pak tavuk',
-  'Golfa',
   'Garanti',
-  'HSI',
-  'Soudis',
-  'Ferme Mariama',
-  'Poussin Mali',
-  'Local',
-  'Importation'
+  'Fermav',
+  'Ouakkaha',
+  'Geldof',
+  'HSI'
 ];
 
 export const PRODUITS_PRIX: { nom: string; prix: number }[] = [
