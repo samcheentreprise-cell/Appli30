@@ -918,6 +918,283 @@ export async function saveEmailsAdmins(emails: string[]): Promise<AdminEmailsRes
   }
 }
 
+// ============================================================
+//  ✅ Grands Clients & Diffusion nouvelle date d'éclosion
+// ============================================================
+export interface RawGrandsClientItem {
+  prenom?: string;
+  nom?: string;
+  ville?: string;
+  tel?: string;
+  telephone?: string;
+  email?: string;
+  label?: string;
+}
+
+export async function getGrandsClients(): Promise<{
+  success: boolean;
+  clients: RawGrandsClientItem[];
+  message?: string;
+}> {
+  try {
+    const result = await callApi('commandePoussins.clients');
+    const rawList: any[] = Array.isArray(result?.data)
+      ? result.data
+      : Array.isArray(result?.data?.clients)
+        ? result.data.clients
+        : [];
+    const normalized: RawGrandsClientItem[] = rawList
+      .map((c: any) => {
+        const prenom = String(c?.prenom ?? '').trim();
+        const nom = String(c?.nom ?? '').trim();
+        const label = String(c?.label ?? `${prenom} ${nom}`).trim();
+        return {
+          prenom,
+          nom,
+          ville: String(c?.ville ?? '').trim(),
+          tel: String(c?.tel ?? c?.telephone ?? '').trim(),
+          telephone: String(c?.tel ?? c?.telephone ?? '').trim(),
+          email: String(c?.email ?? '').trim(),
+          label,
+        };
+      })
+      .filter((c) => Boolean(c.label || c.prenom || c.nom || c.tel || c.email));
+
+    return {
+      success: Boolean(result?.success),
+      clients: normalized,
+      message: result?.error || result?.data?.error,
+    };
+  } catch (err: any) {
+    console.error('[getGrandsClients] Exception:', err);
+    return { success: false, clients: [], message: err?.message || 'Erreur réseau' };
+  }
+}
+
+export async function sendClientDiffusionEmail(
+  subject: string,
+  text: string,
+  recipientEmail: string
+): Promise<SyncResult> {
+  try {
+    const cleaned = sanitizeEmailList([recipientEmail]);
+    if (cleaned.length === 0) {
+      return {
+        success: false,
+        message: `Adresse email invalide : "${recipientEmail}"`,
+        timestamp: new Date().toLocaleTimeString('fr-FR'),
+      };
+    }
+
+    const notifier = await _resolveNotifierIdentity();
+    const result = await callApi(
+      'notifications.envoyer',
+      {
+        username: notifier.username,
+        role: notifier.role,
+        subject,
+        text,
+        destinataires: cleaned,
+      },
+      'POST'
+    );
+
+    const ok =
+      !!result?.success &&
+      result?.data?.succes !== false &&
+      result?.data?.success !== false;
+
+    return {
+      success: ok,
+      message:
+        result?.data?.message ||
+        result?.data?.error ||
+        result?.error ||
+        (ok ? `Email envoyé à ${cleaned[0]}` : `Échec envoi à ${cleaned[0]}`),
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
+  } catch (err: any) {
+    console.error('[sendClientDiffusionEmail] Exception:', err);
+    return {
+      success: false,
+      message: err?.message || 'Erreur réseau',
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
+  }
+}
+
+export async function sendGroupClientDiffusionEmail(
+  subject: string,
+  text: string,
+  recipientEmails: string[]
+): Promise<SyncResult & { count?: number }> {
+  try {
+    const cleaned = sanitizeEmailList(recipientEmails);
+    if (cleaned.length === 0) {
+      return {
+        success: false,
+        count: 0,
+        message: 'Aucune adresse email valide dans la liste des destinataires.',
+        timestamp: new Date().toLocaleTimeString('fr-FR'),
+      };
+    }
+
+    const notifier = await _resolveNotifierIdentity();
+    const result = await callApi(
+      'notifications.envoyer',
+      {
+        username: notifier.username,
+        role: notifier.role,
+        subject,
+        text,
+        destinataires: cleaned,
+      },
+      'POST'
+    );
+
+    const ok =
+      !!result?.success &&
+      result?.data?.succes !== false &&
+      result?.data?.success !== false;
+
+    return {
+      success: ok,
+      count: ok ? cleaned.length : 0,
+      message:
+        result?.data?.message ||
+        result?.data?.error ||
+        result?.error ||
+        (ok
+          ? `Email groupé envoyé à ${cleaned.length} client(s)`
+          : 'Échec de l’envoi groupé'),
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
+  } catch (err: any) {
+    console.error('[sendGroupClientDiffusionEmail] Exception:', err);
+    return {
+      success: false,
+      count: 0,
+      message: err?.message || 'Erreur réseau',
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+    };
+  }
+}
+
+export interface WhatsAppBatchRecipient {
+  uid: string;
+  name: string;
+  phone: string;
+  message?: string;
+}
+
+export interface WhatsAppBatchResult {
+  success: boolean;
+  configured: boolean;
+  provider?: string | null;
+  message?: string;
+  sentCount: number;
+  failedCount: number;
+  results: Array<{ uid: string; phone: string; success: boolean; error?: string }>;
+}
+
+export interface BuiltInWhatsAppStatus {
+  status: 'disconnected' | 'connecting' | 'qr_ready' | 'connected' | 'error';
+  qrDataUrl: string | null;
+  pairingCode: string | null;
+  connectedPhone: string | null;
+  connectedName: string | null;
+  lastError: string | null;
+}
+
+export interface WhatsAppGatewayStatus {
+  configured: boolean;
+  connected: boolean;
+  provider: string | null;
+  builtin?: BuiltInWhatsAppStatus;
+}
+
+export async function getWhatsAppGatewayStatus(): Promise<WhatsAppGatewayStatus> {
+  try {
+    const res = await fetch('/api/whatsapp/status');
+    if (!res.ok) return { configured: false, connected: false, provider: null };
+    const data = await res.json();
+    return {
+      configured: Boolean(data?.configured),
+      connected: Boolean(data?.connected),
+      provider: data?.provider || null,
+      builtin: data?.builtin,
+    };
+  } catch {
+    return { configured: false, connected: false, provider: null };
+  }
+}
+
+export async function connectBuiltInWhatsApp(options?: {
+  pairingPhone?: string;
+  forceFresh?: boolean;
+}): Promise<{ success: boolean; connected: boolean; builtin?: BuiltInWhatsAppStatus }> {
+  try {
+    const res = await fetch('/api/whatsapp/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {}),
+    });
+    const data = await res.json();
+    return {
+      success: Boolean(data?.success),
+      connected: Boolean(data?.connected),
+      builtin: data?.builtin,
+    };
+  } catch {
+    return { success: false, connected: false };
+  }
+}
+
+export async function disconnectBuiltInWhatsApp(): Promise<{
+  success: boolean;
+  builtin?: BuiltInWhatsAppStatus;
+}> {
+  try {
+    const res = await fetch('/api/whatsapp/disconnect', { method: 'POST' });
+    const data = await res.json();
+    return { success: Boolean(data?.success), builtin: data?.builtin };
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function sendWhatsAppBatch(
+  recipients: WhatsAppBatchRecipient[],
+  defaultMessage: string
+): Promise<WhatsAppBatchResult> {
+  try {
+    const res = await fetch('/api/whatsapp/send-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipients, defaultMessage }),
+    });
+    const data = await res.json();
+    return {
+      success: Boolean(data?.success),
+      configured: Boolean(data?.configured),
+      provider: data?.provider || null,
+      message: data?.message,
+      sentCount: Number(data?.sentCount) || 0,
+      failedCount: Number(data?.failedCount) || 0,
+      results: Array.isArray(data?.results) ? data.results : [],
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      configured: false,
+      message: err?.message || 'Erreur réseau WhatsApp',
+      sentCount: 0,
+      failedCount: recipients.length,
+      results: [],
+    };
+  }
+}
+
 // ── Action : oac.commander (insert ou update avec ligne) ──
 async function _oacCommander(item: any): Promise<SyncResult> {
   // ✅ CORRECTION : le GAS attend `idCommande` (comme mirer/eclore/supprimer).

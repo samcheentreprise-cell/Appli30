@@ -6,6 +6,13 @@ import axios from 'axios';
 import { createServer as createViteServer } from 'vite';
 import nodemailer from 'nodemailer';
 import cron from 'node-cron';
+import {
+  autoRestoreBuiltInWhatsApp,
+  getBuiltInWhatsAppStatus,
+  sendBuiltInWhatsAppMessage,
+  startBuiltInWhatsApp,
+  stopBuiltInWhatsApp,
+} from './server/whatsappGateway.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -268,6 +275,218 @@ app.post('/api/send-email', async (req, res) => {
 });
 
 // ============================================================
+// Passerelle WhatsApp automatique (envoi en lot côté serveur)
+// ============================================================
+function detectWhatsAppProvider(): {
+  configured: boolean;
+  provider: 'webhook' | 'ultramsg' | 'greenapi' | 'cloud' | 'builtin';
+} {
+  if (process.env.WHATSAPP_WEBHOOK_URL) {
+    return { configured: true, provider: 'webhook' };
+  }
+  if (process.env.ULTRAMSG_INSTANCE_ID && process.env.ULTRAMSG_TOKEN) {
+    return { configured: true, provider: 'ultramsg' };
+  }
+  if (process.env.GREENAPI_ID_INSTANCE && process.env.GREENAPI_API_TOKEN) {
+    return { configured: true, provider: 'greenapi' };
+  }
+  if (process.env.WHATSAPP_CLOUD_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    return { configured: true, provider: 'cloud' };
+  }
+  // Option gratuite intégrée par défaut (WhatsApp Web Appareils connectés)
+  return { configured: true, provider: 'builtin' };
+}
+
+app.get('/api/whatsapp/status', (_req, res) => {
+  const ext = detectWhatsAppProvider();
+  const builtin = getBuiltInWhatsAppStatus();
+  const isConnected =
+    ext.provider !== 'builtin' ? true : builtin.status === 'connected';
+  res.json({
+    configured: true,
+    provider: ext.provider,
+    connected: isConnected,
+    builtin,
+  });
+});
+
+app.post('/api/whatsapp/connect', async (req, res) => {
+  try {
+    const { pairingPhone, forceFresh } = req.body || {};
+    const builtin = await startBuiltInWhatsApp({
+      pairingPhone: typeof pairingPhone === 'string' ? pairingPhone : undefined,
+      forceFresh: Boolean(forceFresh),
+    });
+    res.json({
+      success: true,
+      connected: builtin.status === 'connected',
+      builtin,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: err?.message || 'Erreur connexion WhatsApp',
+    });
+  }
+});
+
+app.post('/api/whatsapp/disconnect', async (_req, res) => {
+  try {
+    const builtin = await stopBuiltInWhatsApp(true);
+    res.json({ success: true, connected: false, builtin });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: err?.message || 'Erreur déconnexion WhatsApp',
+    });
+  }
+});
+
+app.post('/api/whatsapp/send-batch', async (req, res) => {
+  const { recipients, defaultMessage } = req.body || {};
+  const status = detectWhatsAppProvider();
+
+  if (status.provider === 'builtin') {
+    const bStatus = getBuiltInWhatsAppStatus();
+    if (bStatus.status !== 'connected') {
+      return res.json({
+        success: false,
+        configured: true,
+        connected: false,
+        provider: 'builtin',
+        message:
+          'WhatsApp n’est pas encore connecté. Scannez le QR code (Appareils connectés) pour activer l’envoi automatique.',
+        sentCount: 0,
+        failedCount: 0,
+        results: [],
+      });
+    }
+  }
+
+  if (!Array.isArray(recipients) || recipients.length === 0) {
+    return res.status(400).json({
+      success: false,
+      configured: true,
+      message: 'Aucun destinataire WhatsApp fourni.',
+      results: [],
+    });
+  }
+
+  const results: Array<{
+    uid: string;
+    phone: string;
+    success: boolean;
+    error?: string;
+  }> = [];
+
+  for (let i = 0; i < recipients.length; i++) {
+    const rec = recipients[i] || {};
+    const uid = String(rec.uid || '');
+    const phone = String(rec.phone || '').replace(/\D/g, '');
+    const name = String(rec.name || '');
+    const text = String(rec.message || defaultMessage || '').trim();
+
+    if (!phone || !text) {
+      results.push({
+        uid,
+        phone,
+        success: false,
+        error: 'Numéro ou message manquant',
+      });
+      continue;
+    }
+
+    try {
+      if (status.provider === 'builtin') {
+        const sendRes = await sendBuiltInWhatsAppMessage(phone, text);
+        results.push({
+          uid,
+          phone,
+          success: sendRes.success,
+          error: sendRes.error,
+        });
+      } else if (status.provider === 'webhook') {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (process.env.WHATSAPP_WEBHOOK_TOKEN) {
+          headers.Authorization = `Bearer ${process.env.WHATSAPP_WEBHOOK_TOKEN}`;
+        }
+        await axios.post(
+          process.env.WHATSAPP_WEBHOOK_URL as string,
+          { phone, to: phone, name, text, message: text },
+          { headers, timeout: 15000 }
+        );
+        results.push({ uid, phone, success: true });
+      } else if (status.provider === 'ultramsg') {
+        const instanceId = process.env.ULTRAMSG_INSTANCE_ID;
+        const token = process.env.ULTRAMSG_TOKEN;
+        await axios.post(
+          `https://api.ultramsg.com/${encodeURIComponent(String(instanceId))}/messages/chat`,
+          { token, to: `+${phone}`, body: text },
+          { timeout: 15000 }
+        );
+        results.push({ uid, phone, success: true });
+      } else if (status.provider === 'greenapi') {
+        const idInst = process.env.GREENAPI_ID_INSTANCE;
+        const apiToken = process.env.GREENAPI_API_TOKEN;
+        await axios.post(
+          `https://api.green-api.com/waInstance${encodeURIComponent(String(idInst))}/sendMessage/${encodeURIComponent(String(apiToken))}`,
+          { chatId: `${phone}@c.us`, message: text },
+          { timeout: 15000 }
+        );
+        results.push({ uid, phone, success: true });
+      } else if (status.provider === 'cloud') {
+        const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+        const cloudToken = process.env.WHATSAPP_CLOUD_TOKEN;
+        await axios.post(
+          `https://graph.facebook.com/v20.0/${encodeURIComponent(String(phoneId))}/messages`,
+          {
+            messaging_product: 'whatsapp',
+            to: phone,
+            type: 'text',
+            text: { body: text },
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${cloudToken}`,
+              'Content-Type': 'application/json',
+            },
+            timeout: 15000,
+          }
+        );
+        results.push({ uid, phone, success: true });
+      }
+    } catch (err: any) {
+      const errMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error?.message ||
+        err?.message ||
+        'Erreur envoi WhatsApp';
+      results.push({ uid, phone, success: false, error: String(errMsg) });
+    }
+
+    if (i < recipients.length - 1) {
+      // Délai anti-blocage WhatsApp (1.2s en mode intégré, 150ms pour API cloud)
+      const delayMs = status.provider === 'builtin' ? 1200 : 150;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  const sentCount = results.filter((r) => r.success).length;
+  const failedCount = results.length - sentCount;
+  res.json({
+    success: sentCount > 0,
+    configured: true,
+    connected: true,
+    provider: status.provider,
+    sentCount,
+    failedCount,
+    results,
+  });
+});
+
+// ============================================================
 // Proxy générique vers Google Sheets
 // ============================================================
 app.all('/api/proxy', async (req, res) => {
@@ -409,6 +628,7 @@ async function startServer() {
   app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${port}`);
     console.log(`GAS URL: ${SHEET_URL}`);
+    autoRestoreBuiltInWhatsApp();
   });
 
   // ✅ Daily backup at 18:00

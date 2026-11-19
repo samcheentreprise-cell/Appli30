@@ -1,6 +1,20 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { CommandePoussin, Client, OAC, UserRole } from '../types';
-import { getFParamData } from '../services/googleSheet';
+import {
+  getFParamData,
+  getGrandsClients,
+  sendGroupClientDiffusionEmail,
+} from '../services/googleSheet';
+import {
+  EclosionDiffusionView,
+  AnnouncedHatchRecord,
+  buildEclosionMessage,
+  buildEclosionSubject,
+  mergeClientsWithoutDuplicates,
+  isHatchEligibleForDiffusion,
+  loadHatchSendLog,
+  saveHatchSendLog,
+} from './EclosionDiffusionView';
 
 interface CommandesPoussinsModuleProps {
   commandes: CommandePoussin[];
@@ -66,8 +80,61 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
   onNavigateToLivraisons,
   onClose,
 }) => {
-  // Navigation View: 'accueil' | 'dashboard' | 'nouvelle' | 'chercher'
-  const [view, setView] = useState<'accueil' | 'dashboard' | 'nouvelle' | 'chercher'>('accueil');
+  // Navigation View: 'accueil' | 'dashboard' | 'nouvelle' | 'chercher' | 'diffusion'
+  const [view, setView] = useState<'accueil' | 'dashboard' | 'nouvelle' | 'chercher' | 'diffusion'>('accueil');
+  const [diffusionHatchId, setDiffusionHatchId] = useState<string>('');
+  const [announcedMap, setAnnouncedMap] = useState<Record<string, AnnouncedHatchRecord>>(() => {
+    try {
+      if (typeof localStorage === 'undefined') return {};
+      const raw = localStorage.getItem('samche_announced_hatch_keys');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const [autoEmailEnabled, setAutoEmailEnabled] = useState<boolean>(() => {
+    try {
+      return typeof localStorage !== 'undefined' &&
+        localStorage.getItem('samche_auto_email_diffusion') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const autoDispatchedRef = useRef<Set<string>>(new Set());
+
+  const markHatchAnnounced = useCallback(
+    (
+      hatchKey: string,
+      mode: 'diffusion' | 'auto_email' | 'dismissed' = 'diffusion',
+      counts?: { emailCount?: number; waCount?: number }
+    ) => {
+      if (!hatchKey) return;
+      setAnnouncedMap((prev) => {
+        const next: Record<string, AnnouncedHatchRecord> = {
+          ...prev,
+          [hatchKey]: {
+            key: hatchKey,
+            announcedAt: new Date().toISOString(),
+            mode,
+            emailCount: counts?.emailCount ?? prev[hatchKey]?.emailCount,
+            waCount: counts?.waCount ?? prev[hatchKey]?.waCount,
+          },
+        };
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('samche_announced_hatch_keys', JSON.stringify(next));
+          }
+        } catch {
+          // ignore storage quota errors
+        }
+        return next;
+      });
+    },
+    []
+  );
 
   // ✅ Prix chargés dynamiquement depuis F-Param (col E/F, à partir ligne 4)
   const [produitsPrix, setProduitsPrix] = useState<Record<string, number>>({
@@ -113,6 +180,15 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       }
     }
     if (clean.includes('-')) {
+      const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (isoMatch) {
+        const d = new Date(
+          parseInt(isoMatch[1], 10),
+          parseInt(isoMatch[2], 10) - 1,
+          parseInt(isoMatch[3], 10)
+        );
+        if (!isNaN(d.getTime())) return d;
+      }
       const d = new Date(clean);
       if (!isNaN(d.getTime())) return d;
     }
@@ -313,6 +389,98 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
     const list = hatchDatesData.filter((d) => !d.isPast || d.prevision > 0);
     return list.length > 0 ? list : hatchDatesData;
   }, [hatchDatesData]);
+
+  // Nouvelles dates d'éclosion éligibles : strictement futures (> aujourd'hui) ET > 1 000 poussins
+  const unannouncedHatchDates = useMemo(() => {
+    return activeHatchDates.filter(
+      (d) => isHatchEligibleForDiffusion(d) && !announcedMap[d.id]
+    );
+  }, [activeHatchDates, announcedMap]);
+
+  const openDiffusionForDate = useCallback((hatchId?: string) => {
+    if (hatchId) setDiffusionHatchId(hatchId);
+    setView('diffusion');
+  }, []);
+
+  const handleToggleAutoEmail = useCallback(
+    (enabled: boolean) => {
+      setAutoEmailEnabled(enabled);
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('samche_auto_email_diffusion', String(enabled));
+          if (enabled) {
+            // Mémoriser les dates déjà connues au moment de l'activation pour n'auto-envoyer que les nouvelles dates futures
+            const baseline = activeHatchDates.map((d) => d.id);
+            localStorage.setItem('samche_auto_email_baseline', JSON.stringify(baseline));
+          }
+        }
+      } catch {
+        // ignore
+      }
+      showNotif(
+        enabled
+          ? 'Envoi automatique par Email activé pour les prochaines nouvelles éclosions.'
+          : 'Envoi automatique par Email désactivé.',
+        true
+      );
+    },
+    [activeHatchDates]
+  );
+
+  // Envoi automatique de l'email groupé dès qu'une NOUVELLE date d'éclosion apparaît (si activé)
+  useEffect(() => {
+    if (!autoEmailEnabled || unannouncedHatchDates.length === 0) return;
+
+    let baselineSet = new Set<string>();
+    try {
+      const raw = localStorage.getItem('samche_auto_email_baseline');
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) baselineSet = new Set(arr);
+      }
+    } catch {
+      // ignore
+    }
+
+    const targets = unannouncedHatchDates.filter(
+      (d) => !baselineSet.has(d.id) && !autoDispatchedRef.current.has(d.id)
+    );
+    if (targets.length === 0) return;
+
+    targets.forEach((d) => autoDispatchedRef.current.add(d.id));
+
+    (async () => {
+      const gcRes = await getGrandsClients();
+      if (!gcRes.success) return;
+      const { recipients, emailList } = mergeClientsWithoutDuplicates(gcRes.clients, clients);
+      if (emailList.length === 0) return;
+
+      for (const hatch of targets) {
+        const res = await sendGroupClientDiffusionEmail(
+          buildEclosionSubject(hatch),
+          buildEclosionMessage(hatch),
+          emailList
+        );
+        if (res.success) {
+          const nowIso = new Date().toISOString();
+          const log = loadHatchSendLog(hatch.id);
+          recipients.forEach((r) => {
+            if (r.email) {
+              log[r.stableKey] = { ...log[r.stableKey], emailAt: nowIso };
+            }
+          });
+          saveHatchSendLog(hatch.id, log);
+          markHatchAnnounced(hatch.id, 'auto_email', {
+            emailCount: res.count ?? emailList.length,
+          });
+          showNotif(
+            `⚡ Email envoyé automatiquement à ${res.count ?? emailList.length} client(s) pour le ${hatch.date} !`,
+            true
+          );
+        }
+      }
+    })();
+  }, [autoEmailEnabled, unannouncedHatchDates, clients, markHatchAnnounced]);
 
   // Synchronize selDateKey & selType with available active hatch dates
   useEffect(() => {
@@ -704,6 +872,24 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             <span>🔍</span>
             <span>Chercher</span>
           </button>
+          <button
+            onClick={() => openDiffusionForDate(unannouncedHatchDates[0]?.id)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              view === 'diffusion'
+                ? 'bg-[#f39c12] text-[#1a3050] shadow-sm'
+                : 'bg-emerald-500/25 text-white hover:bg-emerald-500/40 border border-emerald-300/40'
+            }`}
+            title="Diffuser une nouvelle date d'éclosion par WhatsApp et Email"
+          >
+            <span>📢</span>
+            <span className="hidden md:inline">Annoncer Éclosion</span>
+            <span className="md:hidden">Annoncer</span>
+            {unannouncedHatchDates.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-[#1a3050] text-[10px] font-black leading-tight">
+                {unannouncedHatchDates.length}
+              </span>
+            )}
+          </button>
           {onNavigateToLivraisons && (
             <button
               onClick={onNavigateToLivraisons}
@@ -766,8 +952,48 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             </p>
           </div>
 
-          {/* 4 Modules Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Bannière alerte si nouvelle(s) date(s) d'éclosion à diffuser */}
+          {unannouncedHatchDates.length > 0 && (
+            <div className="bg-emerald-500/20 border border-emerald-300/40 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
+              <div className="flex items-start gap-3">
+                <span className="text-3xl shrink-0">📢</span>
+                <div>
+                  <div className="font-extrabold text-sm sm:text-base text-white">
+                    {unannouncedHatchDates.length} nouvelle{unannouncedHatchDates.length > 1 ? 's' : ''} date{unannouncedHatchDates.length > 1 ? 's' : ''} d'éclosion disponible{unannouncedHatchDates.length > 1 ? 's' : ''} !
+                  </div>
+                  <div className="text-xs text-emerald-100 mt-0.5">
+                    Prochaine à annoncer :{' '}
+                    <strong>{unannouncedHatchDates[0].date}</strong> ({unannouncedHatchDates[0].type} —{' '}
+                    {Math.max(
+                      0,
+                      unannouncedHatchDates[0].prevision - unannouncedHatchDates[0].commande
+                    ).toLocaleString('fr-FR')}{' '}
+                    poussins disponibles)
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => openDiffusionForDate(unannouncedHatchDates[0].id)}
+                  className="px-4 py-2.5 bg-[#10b981] hover:bg-[#059669] text-white font-extrabold text-xs rounded-xl shadow-md transition"
+                >
+                  📢 Choisir clients &amp; Envoyer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => markHatchAnnounced(unannouncedHatchDates[0].id, 'dismissed')}
+                  className="px-3 py-2.5 bg-white/15 hover:bg-white/25 text-white text-xs font-bold rounded-xl transition"
+                  title="Ne plus rappeler pour cette date"
+                >
+                  Ignorer
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 5 Modules Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             {/* Card 1: Tableau de Bord */}
             <div
               onClick={() => setView('dashboard')}
@@ -813,7 +1039,27 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
               </p>
             </div>
 
-            {/* Card 4: Livraisons & Sorties */}
+            {/* Card 4: Diffusion Clients */}
+            <div
+              onClick={() => openDiffusionForDate(unannouncedHatchDates[0]?.id)}
+              className="rounded-2xl p-6 text-center cursor-pointer transition transform hover:-translate-y-2 hover:shadow-2xl shadow-xl flex flex-col items-center justify-between relative"
+              style={{
+                background: 'linear-gradient(135deg, #0f766e, #14b8a6)',
+              }}
+            >
+              {unannouncedHatchDates.length > 0 && (
+                <span className="absolute top-3 right-3 px-2 py-0.5 rounded-full bg-amber-300 text-[#1a3050] text-[10px] font-black shadow-sm">
+                  {unannouncedHatchDates.length} nouvelle{unannouncedHatchDates.length > 1 ? 's' : ''}
+                </span>
+              )}
+              <div className="text-5xl mb-3">📢</div>
+              <h2 className="text-xl font-bold mb-2">Annoncer Éclosion</h2>
+              <p className="text-xs text-teal-100 leading-relaxed opacity-90">
+                Cochez les clients et envoyez en 1 clic (dates &gt; 1 000 poussins)
+              </p>
+            </div>
+
+            {/* Card 5: Livraisons & Sorties */}
             <div
               onClick={() => {
                 if (onNavigateToLivraisons) {
@@ -863,7 +1109,7 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
       {view === 'dashboard' && (
         <div className="bg-gradient-to-br from-[#f8f9fa] to-[#e0f2fe] rounded-3xl p-5 sm:p-8 space-y-6 shadow-xl border border-sky-100 animate-fade-in">
           {/* Header */}
-          <div className="bg-gradient-to-r from-[#5b7c99] to-[#6b8db5] text-white p-6 rounded-2xl shadow-md">
+          <div className="bg-gradient-to-r from-[#5b7c99] to-[#6b8db5] text-white p-6 rounded-2xl shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <span className="text-3xl">📊</span>
               <div>
@@ -873,7 +1119,38 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                 </p>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => openDiffusionForDate(unannouncedHatchDates[0]?.id)}
+              className="px-4 py-2.5 bg-[#10b981] hover:bg-[#059669] text-white font-extrabold text-xs rounded-xl shadow-sm transition flex items-center gap-2 self-start sm:self-center"
+            >
+              <span>📢</span>
+              <span>Annoncer une éclosion aux clients</span>
+            </button>
           </div>
+
+          {unannouncedHatchDates.length > 0 && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3 text-xs text-emerald-950">
+                <span className="text-2xl">✨</span>
+                <div>
+                  <div className="font-extrabold">
+                    Nouvelle date d'éclosion prête à être diffusée ({unannouncedHatchDates[0].date} — {unannouncedHatchDates[0].type})
+                  </div>
+                  <div className="text-emerald-800 mt-0.5">
+                    {Math.max(0, unannouncedHatchDates[0].prevision - unannouncedHatchDates[0].commande).toLocaleString('fr-FR')} poussins disponibles • Envoi groupé WhatsApp &amp; Email disponible
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => openDiffusionForDate(unannouncedHatchDates[0].id)}
+                className="px-4 py-2 bg-[#0f766e] hover:bg-[#0d5f59] text-white font-bold text-xs rounded-xl transition shrink-0"
+              >
+                📢 Ouvrir la diffusion
+              </button>
+            </div>
+          )}
 
           {/* 4 KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1013,6 +1290,26 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
                           {taux}% rempli
                         </div>
                       </div>
+
+                      {isHatchEligibleForDiffusion(d) && (
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            {Object.keys(loadHatchSendLog(d.id)).length > 0 || announcedMap[d.id]
+                              ? '✓ Déjà diffusée'
+                              : '✨ À diffuser'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openDiffusionForDate(d.id);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-bold transition"
+                          >
+                            📢 Annoncer aux clients
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -1560,6 +1857,23 @@ export const CommandesPoussinsModule: React.FC<CommandesPoussinsModuleProps> = (
             )}
           </div>
         </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          VIEW 5: DIFFUSION NOUVELLE DATE D'ÉCLOSION (WhatsApp & Email)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {view === 'diffusion' && (
+        <EclosionDiffusionView
+          activeHatchDates={activeHatchDates}
+          initialHatchId={diffusionHatchId}
+          clients={clients}
+          announcedMap={announcedMap}
+          autoEmailEnabled={autoEmailEnabled}
+          onToggleAutoEmail={handleToggleAutoEmail}
+          onMarkAnnounced={markHatchAnnounced}
+          showNotif={showNotif}
+          onBack={() => setView('dashboard')}
+        />
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════════
