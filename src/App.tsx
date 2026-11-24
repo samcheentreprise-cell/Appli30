@@ -129,6 +129,7 @@ export default function App() {
   });
   const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
+  const syncEpochRef = React.useRef(0);
 
   // Quick action modal triggers for other modules
   const [isFactureModalOpen, setIsFactureModalOpen] = useState(false);
@@ -895,31 +896,68 @@ export default function App() {
     }
   };
 
-  const handleAddMouvementCaisse = async (mvt: MouvementCaisse) => {
-    // ✅ CORRECTION BUG SYNTAXE (était: `setMouvementsCaisse((prev) => vt, ...prev]);`)
+  const handleAddMouvementCaisse = async (
+    mvt: MouvementCaisse
+  ): Promise<{ success: boolean; message?: string }> => {
+    syncEpochRef.current += 1;
+    const tempLigne = mvt.ligne;
     setMouvementsCaisse((prev) => [mvt, ...prev]);
     const res = await syncWithUser({ type: 'caisse' as any, action: 'insert', item: mvt });
     if (res.success) {
-      handleTriggerSync();
+      if (typeof res.ligne === 'number') {
+        setMouvementsCaisse((prev) =>
+          prev.map((m) => (m.ligne === tempLigne ? { ...m, ligne: res.ligne! } : m))
+        );
+      }
+      await handleTriggerSync();
+      return { success: true, message: res.message };
     }
+    console.error('[App] ❌ Échec enregistrement Caisse:', res);
+    setMouvementsCaisse((prev) => prev.filter((m) => m.ligne !== tempLigne));
+    return {
+      success: false,
+      message: res.message || 'Impossible d’enregistrer le mouvement dans Google Sheets.',
+    };
   };
 
-  const handleUpdateMouvementCaisse = async (updated: MouvementCaisse) => {
+  const handleUpdateMouvementCaisse = async (
+    updated: MouvementCaisse
+  ): Promise<{ success: boolean; message?: string }> => {
+    syncEpochRef.current += 1;
+    const previousList = mouvementsCaisse;
     setMouvementsCaisse((prev) =>
       prev.map((m) => (m.ligne === updated.ligne ? updated : m))
     );
     const res = await syncWithUser({ type: 'caisse' as any, action: 'update', item: updated });
     if (res.success) {
-      handleTriggerSync();
+      await handleTriggerSync();
+      return { success: true, message: res.message };
     }
+    console.error('[App] ❌ Échec modification Caisse:', res);
+    setMouvementsCaisse(previousList);
+    return {
+      success: false,
+      message: res.message || 'Impossible de modifier le mouvement dans Google Sheets.',
+    };
   };
 
-  const handleDeleteMouvementCaisse = async (ligne: number) => {
+  const handleDeleteMouvementCaisse = async (
+    ligne: number
+  ): Promise<{ success: boolean; message?: string }> => {
+    syncEpochRef.current += 1;
+    const previousList = mouvementsCaisse;
     setMouvementsCaisse((prev) => prev.filter((m) => m.ligne !== ligne));
     const res = await syncWithUser({ type: 'caisse' as any, action: 'delete', item: { ligne } });
     if (res.success) {
-      handleTriggerSync();
+      await handleTriggerSync();
+      return { success: true, message: res.message };
     }
+    console.error('[App] ❌ Échec suppression Caisse:', res);
+    setMouvementsCaisse(previousList);
+    return {
+      success: false,
+      message: res.message || 'Impossible de supprimer le mouvement dans Google Sheets.',
+    };
   };
 
   const handleAddCommandePoussin = async (cmd: CommandePoussin) => {
@@ -1040,6 +1078,7 @@ export default function App() {
 
   // Trigger Google Sheets Sync
   const handleTriggerSync = async () => {
+    const startEpoch = syncEpochRef.current;
     setSyncStatus((prev) => ({ ...prev, syncing: true }));
     const result = await fetchGoogleSheetsData();
     setLastSyncResult(result);
@@ -1048,6 +1087,11 @@ export default function App() {
       lastSync: result.timestamp,
       error: result.success ? undefined : result.message,
     });
+
+    // Ne pas écraser les données locales si une écriture vient d'être lancée entre-temps
+    if (startEpoch !== syncEpochRef.current) {
+      return;
+    }
 
     // Automatically update all in-memory and local data strictly from Google Sheets
     if (result.success && result.parsedData) {

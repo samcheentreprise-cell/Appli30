@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
-import { createServer as createViteServer } from 'vite';
 import nodemailer from 'nodemailer';
 import cron from 'node-cron';
 import {
@@ -578,20 +577,22 @@ app.get(['/api/guide-html', '/guide-samche.html'], (_req, res) => {
 // ✅ Démarrage du serveur — SIMPLIFIÉ pour Cloud Run
 // ============================================================
 async function startServer() {
-  const isProd = process.env.NODE_ENV === 'production'
-    && fs.existsSync(path.resolve(__dirname, 'dist'));
+  const distPath = path.resolve(__dirname, 'dist');
+  const hasDist = fs.existsSync(distPath);
+  const isProd =
+    hasDist &&
+    (process.env.NODE_ENV === 'production' ||
+      process.env.npm_lifecycle_event === 'start');
 
   if (isProd) {
-    const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
 
     // ✅ Catch-all compatible Express 4 ET 5
-    app.use((req, res) => {
+    app.use((_req, res) => {
       const indexHtmlPath = path.resolve(distPath, 'index.html');
       if (fs.existsSync(indexHtmlPath)) {
         res.sendFile(indexHtmlPath);
       } else {
-        // ✅ Fallback si index.html n'existe pas — ne pas crasher
         res.status(200).send(`
           <!DOCTYPE html>
           <html><body>
@@ -604,27 +605,42 @@ async function startServer() {
     console.log('[startup] Running in production mode');
   } else {
     console.log('[startup] Running in development mode');
-    const vite = await createViteServer({
-      server: { middlewareMode: true, host: '0.0.0.0', hmr: false },
-      appType: 'spa',
-    });
-
-    app.use(vite.middlewares);
+    const vitePromise = import('vite').then(({ createServer: createViteServer }) =>
+      createViteServer({
+        server: { middlewareMode: true, host: '0.0.0.0', hmr: false },
+        appType: 'spa',
+      })
+    );
 
     app.use(async (req, res, next) => {
       try {
+        const vite = await vitePromise;
+        vite.middlewares(req, res, next);
+      } catch (e) {
+        next(e);
+      }
+    });
+
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await vitePromise;
         const indexPath = path.resolve(__dirname, 'index.html');
-        let indexHtml = fs.readFileSync(indexPath, 'utf-8');
+        const indexHtml = fs.readFileSync(indexPath, 'utf-8');
         const template = await vite.transformIndexHtml(req.originalUrl, indexHtml);
         res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
       } catch (e: any) {
-        vite.ssrFixStacktrace(e);
+        try {
+          const vite = await vitePromise;
+          vite.ssrFixStacktrace(e);
+        } catch {
+          // ignore
+        }
         next(e);
       }
     });
   }
 
-  // ✅ Démarrer le serveur IMMÉDIATEMENT
+  // ✅ Démarrer le serveur IMMÉDIATEMENT sur 0.0.0.0:PORT
   app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${port}`);
     console.log(`GAS URL: ${SHEET_URL}`);
@@ -635,7 +651,6 @@ async function startServer() {
   cron.schedule('0 18 * * *', async () => {
     console.log('[Cron] Daily backup triggered');
     try {
-      // Trigger GAS backup action
       await callGas('backup.generer');
       await sendNotificationEmail('Sauvegarde quotidienne effectuée', 'La sauvegarde quotidienne a été effectuée avec succès.');
     } catch (error) {

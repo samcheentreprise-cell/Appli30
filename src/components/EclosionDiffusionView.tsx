@@ -423,7 +423,7 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
     checked: false,
   });
   const [showWaConnectPanel, setShowWaConnectPanel] = useState<boolean>(false);
-  const [pairingPhoneInput, setPairingPhoneInput] = useState<string>('');
+  const [pairingPhoneInput, setPairingPhoneInput] = useState<string>('22366565055');
   const [isConnectingWa, setIsConnectingWa] = useState<boolean>(false);
 
   const fetchGrandsClients = useCallback(async () => {
@@ -460,10 +460,10 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
     return () => clearInterval(timer);
   }, [showWaConnectPanel, waGateway.connected, showNotif]);
 
-  const handleStartWaQr = async (usePairing = false) => {
+  const handleStartWaQr = async (usePairing = false, overridePhone?: string) => {
     setIsConnectingWa(true);
     setShowWaConnectPanel(true);
-    const cleanPhone = pairingPhoneInput.replace(/\D/g, '');
+    const cleanPhone = (overridePhone ?? pairingPhoneInput).replace(/\D/g, '');
     const res = await connectBuiltInWhatsApp({
       pairingPhone: usePairing && cleanPhone.length >= 8 ? cleanPhone : undefined,
       forceFresh: true,
@@ -489,6 +489,7 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
   const [emailSubject, setEmailSubject] = useState<string>('');
   const [isEditingMessage, setIsEditingMessage] = useState<boolean>(false);
   const [copiedMsg, setCopiedMsg] = useState<boolean>(false);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
   // Channel toggles
   const [sendByEmail, setSendByEmail] = useState<boolean>(true);
@@ -1084,13 +1085,20 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
                         )}
                       </div>
                     ) : (
-                      <div className="mt-1.5">
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleStartWaQr(true, pairingPhoneInput || '22366565055')}
+                          className="px-2.5 py-1.5 bg-[#25D366] hover:bg-[#1fb858] text-white rounded-lg text-[11px] font-extrabold shadow-2xs transition cursor-pointer"
+                        >
+                          📱 Connecter ce téléphone (Sans QR)
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleStartWaQr(false)}
-                          className="px-2.5 py-1.5 bg-[#25D366] hover:bg-[#1fb858] text-white rounded-lg text-[11px] font-extrabold shadow-2xs transition cursor-pointer"
+                          className="px-2.5 py-1.5 bg-[#1a3050] hover:bg-[#274570] text-white rounded-lg text-[11px] font-bold shadow-2xs transition cursor-pointer"
                         >
-                          📱 Connecter WhatsApp (Gratuit)
+                          📷 QR Code
                         </button>
                       </div>
                     )}
@@ -1099,13 +1107,13 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
               </div>
             </div>
 
-            {/* Panneau QR Code / Code d'appairage gratuit intégré */}
+            {/* Panneau Connexion WhatsApp sans QR Code (même téléphone) ou par QR Code */}
             {showWaConnectPanel && !waGateway.connected && (
               <div className="bg-emerald-50/70 border-2 border-emerald-300 rounded-2xl p-4 space-y-3 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-extrabold text-emerald-950 flex items-center gap-2">
                     <span>📱</span>
-                    <span>Connecter le WhatsApp du Couvoir (100% Gratuit)</span>
+                    <span>Connecter votre WhatsApp sur ce téléphone (Sans QR Code • Gratuit)</span>
                   </div>
                   <button
                     type="button"
@@ -1117,9 +1125,45 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
-                  {/* QR Code */}
-                  <div className="bg-white border border-emerald-200 rounded-xl p-3 text-center space-y-2">
-                    {waGateway.builtin?.qrDataUrl ? (
+                  {/* Code à 8 chiffres ou QR Code */}
+                  <div className="bg-white border border-emerald-200 rounded-xl p-4 text-center space-y-3">
+                    {waGateway.builtin?.pairingCode ? (
+                      <div className="py-2 space-y-3">
+                        <div className="text-[11px] text-slate-500 font-bold uppercase">
+                          1. Copiez ce code ({pairingPhoneInput}) :
+                        </div>
+                        <div className="text-2xl font-black tracking-widest text-[#1a3050] font-mono bg-emerald-50 py-2.5 px-4 rounded-xl border border-emerald-200 inline-block">
+                          {waGateway.builtin.pairingCode}
+                        </div>
+                        <div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const rawCode = (waGateway.builtin?.pairingCode || '').replace(/-/g, '');
+                                await navigator.clipboard.writeText(rawCode);
+                                setCopiedCode(true);
+                                setTimeout(() => setCopiedCode(false), 2500);
+                              } catch {
+                                showNotif('Copie bloquée par le navigateur.', false);
+                              }
+                            }}
+                            className={`px-4 py-2 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
+                              copiedCode
+                                ? 'bg-emerald-600 text-white border-emerald-600'
+                                : 'bg-[#1a3050] hover:bg-[#274570] text-white border-[#1a3050]'
+                            }`}
+                          >
+                            {copiedCode ? '✓ Code copié !' : '📋 Copier le code'}
+                          </button>
+                        </div>
+                        <div className="text-[11px] text-slate-700 leading-relaxed text-left bg-slate-50 p-2.5 rounded-xl border border-slate-200 space-y-1">
+                          <div><strong>2. Dans WhatsApp sur votre téléphone :</strong></div>
+                          <div>• Appuyez sur la notification WhatsApp si elle s’affiche, <strong>OU</strong></div>
+                          <div>• Ouvrez <strong>WhatsApp</strong> → <strong>⋮ / Réglages</strong> → <strong>Appareils connectés</strong> → <strong>Connecter un appareil</strong> → <strong>« Lier avec le numéro de téléphone »</strong> (en bas) et <strong>collez le code</strong>.</div>
+                        </div>
+                      </div>
+                    ) : waGateway.builtin?.qrDataUrl ? (
                       <>
                         <img
                           src={waGateway.builtin.qrDataUrl}
@@ -1131,25 +1175,12 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
                           <strong>Connecter un appareil</strong> et scannez ce code.
                         </div>
                       </>
-                    ) : waGateway.builtin?.pairingCode ? (
-                      <div className="py-6 space-y-2">
-                        <div className="text-[11px] text-slate-500 font-bold uppercase">
-                          Code à saisir dans WhatsApp :
-                        </div>
-                        <div className="text-2xl font-black tracking-widest text-[#1a3050] font-mono bg-emerald-50 py-2 px-3 rounded-xl border border-emerald-200 inline-block">
-                          {waGateway.builtin.pairingCode}
-                        </div>
-                        <div className="text-[11px] text-slate-600">
-                          Appareils connectés → Connecter un appareil →{' '}
-                          <strong>Lier avec le numéro de téléphone</strong>
-                        </div>
-                      </div>
                     ) : (
                       <div className="py-10 text-slate-500 space-y-2">
                         <div className="text-2xl">⏳</div>
                         <div>
                           {isConnectingWa
-                            ? 'Génération du QR Code...'
+                            ? 'Génération du code en cours...'
                             : 'Connexion aux serveurs WhatsApp en cours...'}
                         </div>
                       </div>
@@ -1161,15 +1192,13 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
                     )}
                   </div>
 
-                  {/* Méthode alternative : par numéro de téléphone (utile si on est sur le téléphone) */}
+                  {/* Changer le numéro ou basculer en QR Code */}
                   <div className="space-y-2.5 text-[11px] text-slate-700">
                     <div className="font-extrabold text-slate-900 text-xs">
-                      Vous utilisez le même téléphone ?
+                      Numéro WhatsApp à connecter :
                     </div>
                     <p className="text-slate-600 leading-relaxed">
-                      Si vous ne pouvez pas scanner le QR code, saisissez votre numéro avec
-                      l'indicatif (ex : <span className="font-mono">22366565055</span>) pour
-                      recevoir un code à 8 chiffres :
+                      Aucun scan nécessaire : WhatsApp vous envoie une notification directe sur ce numéro pour valider en 1 clic :
                     </p>
                     <div className="flex gap-2">
                       <input
@@ -1183,18 +1212,18 @@ export const EclosionDiffusionView: React.FC<EclosionDiffusionViewProps> = ({
                         type="button"
                         onClick={() => handleStartWaQr(true)}
                         disabled={isConnectingWa}
-                        className="px-3 py-2 bg-[#1a3050] hover:bg-[#274570] text-white rounded-xl font-bold shrink-0"
+                        className="px-3 py-2 bg-[#1a3050] hover:bg-[#274570] text-white rounded-xl font-bold shrink-0 cursor-pointer"
                       >
-                        Obtenir code
+                        Nouveau code
                       </button>
                     </div>
                     <button
                       type="button"
                       onClick={() => handleStartWaQr(false)}
                       disabled={isConnectingWa}
-                      className="text-[#0f766e] font-bold hover:underline"
+                      className="text-[#0f766e] font-bold hover:underline cursor-pointer"
                     >
-                      🔄 Générer un nouveau QR Code
+                      📷 Ou afficher un QR Code (si vous êtes sur un PC)
                     </button>
                   </div>
                 </div>

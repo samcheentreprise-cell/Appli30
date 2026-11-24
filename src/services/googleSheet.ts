@@ -15,6 +15,7 @@ export interface SyncResult {
   errorDetails?: string;
   suggestedAction?: string;
   htmlPreview?: string;
+  ligne?: number;
 }
 
 // ✅ Liste des anciens URLs GAS cassés qu'il faut ignorer/migrer automatiquement.
@@ -595,6 +596,13 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
   // Note : NE PAS supprimer `data.statut` ici — `en_attente` (soumissions.modifier),
   // `commandes_poussins`, et `factures` ont besoin de transmettre `statut` !
 
+  // Sur un ajout (insert), ne JAMAIS transmettre un numéro de ligne calculé côté client :
+  // si une ligne précédente a été supprimée dans Sheets, `length + offset` retombe sur une
+  // ligne existante et GAS écrase cette ligne au lieu d'en ajouter une nouvelle !
+  if (crudAction === 'insert' && (type === 'caisse' || type === 'ventes' || type === 'depenses')) {
+    delete data.ligne;
+  }
+
   // DELETE : envoyer uniquement la clé (+ identifiant utilisateur pour _checkRole)
   if (crudAction === 'delete') {
     console.log(`[DEBUG] SyncPush DELETE initiated for type: ${type}, action: ${gasAction}, item:`, item);
@@ -653,6 +661,7 @@ export async function syncPushToGoogleSheets(payload: any): Promise<SyncResult> 
     success: ok,
     message: result?.data?.message || result?.data?.error || result?.message || result?.error || (ok ? 'Écriture OK' : 'Écriture échouée'),
     code: result?.data?.code || result?.code || '',
+    ligne: typeof result?.data?.ligne === 'number' ? result.data.ligne : undefined,
     timestamp: new Date().toLocaleTimeString('fr-FR'),
   };
 }

@@ -15,11 +15,13 @@ export const MOUVEMENTS_CAISSE_SORTIES = [
   'Frais divers',
 ];
 
+type CaisseMutationResult = { success: boolean; message?: string } | void;
+
 interface CaisseModuleProps {
   mouvements: MouvementCaisse[];
-  onAddMouvement: (mvt: MouvementCaisse) => void;
-  onUpdateMouvement?: (mvt: MouvementCaisse) => void;
-  onDeleteMouvement?: (ligne: number) => void;
+  onAddMouvement: (mvt: MouvementCaisse) => Promise<CaisseMutationResult> | CaisseMutationResult;
+  onUpdateMouvement?: (mvt: MouvementCaisse) => Promise<CaisseMutationResult> | CaisseMutationResult;
+  onDeleteMouvement?: (ligne: number) => Promise<CaisseMutationResult> | CaisseMutationResult;
   onClose?: () => void;
 }
 
@@ -48,6 +50,7 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
   // Toast & Modals
   const [toast, setToast] = useState<{ message: string; ok: boolean } | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const showToast = (message: string, ok: boolean) => {
     setToast({ message, ok });
@@ -129,7 +132,8 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
   };
 
   // Save new movement
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (isSaving) return;
     if (!date) {
       showToast('Veuillez renseigner la date.', false);
       return;
@@ -149,9 +153,11 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
 
     const dateParts = date.split('-');
     const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : date;
+    const nextTempLigne =
+      mouvements.reduce((max, m) => Math.max(max, Number(m.ligne) || 0), 4) + 1;
 
     const newMvt: MouvementCaisse = {
-      ligne: mouvements.length + 5,
+      ligne: nextTempLigne,
       date: formattedDate,
       type: typeMvt,
       detail: detail.trim() || '--',
@@ -161,13 +167,23 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
       observation,
     };
 
-    onAddMouvement(newMvt);
-    showToast('Mouvement enregistré avec succès.', true);
-    raz();
+    setIsSaving(true);
+    try {
+      const res = await onAddMouvement(newMvt);
+      if (res && res.success === false) {
+        showToast(res.message || "Échec de l'enregistrement dans Google Sheets.", false);
+        return;
+      }
+      showToast('Mouvement enregistré dans Google Sheets.', true);
+      raz();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Modify selected movement
-  const handleMod = () => {
+  const handleMod = async () => {
+    if (isSaving) return;
     if (selectedLigne === null) {
       showToast('Veuillez sélectionner un mouvement dans la liste.', false);
       return;
@@ -195,24 +211,40 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
       observation,
     };
 
-    if (onUpdateMouvement) {
-      onUpdateMouvement(updated);
-    } else {
-      onAddMouvement(updated);
+    setIsSaving(true);
+    try {
+      const res = onUpdateMouvement
+        ? await onUpdateMouvement(updated)
+        : await onAddMouvement(updated);
+      if (res && res.success === false) {
+        showToast(res.message || 'Échec de la modification dans Google Sheets.', false);
+        return;
+      }
+      showToast('Mouvement modifié dans Google Sheets.', true);
+      raz();
+    } finally {
+      setIsSaving(false);
     }
-    showToast('Mouvement modifié avec succès.', true);
-    raz();
   };
 
   // Delete selected movement
-  const confirmDelete = () => {
-    if (selectedLigne === null) return;
+  const confirmDelete = async () => {
+    if (selectedLigne === null || isSaving) return;
     setDeleteConfirmOpen(false);
-    if (onDeleteMouvement) {
-      onDeleteMouvement(selectedLigne);
+    setIsSaving(true);
+    try {
+      const res = onDeleteMouvement
+        ? await onDeleteMouvement(selectedLigne)
+        : undefined;
+      if (res && res.success === false) {
+        showToast(res.message || 'Échec de la suppression dans Google Sheets.', false);
+        return;
+      }
+      showToast('Mouvement supprimé avec succès.', true);
+      raz();
+    } finally {
+      setIsSaving(false);
     }
-    showToast('Mouvement supprimé avec succès.', true);
-    raz();
   };
 
   // Filtered table rows
@@ -480,32 +512,32 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
           <div className="grid grid-cols-4 gap-1.5 pt-1">
             <button
               type="button"
-              disabled={isRowSelected}
+              disabled={isRowSelected || isSaving}
               onClick={handleSave}
               className={`py-2 px-1 rounded-lg text-xs font-bold text-white shadow-sm transition ${
-                !isRowSelected ? 'bg-gradient-to-r from-[#4F46E5] to-[#7C3AED] hover:shadow-md' : 'opacity-40 cursor-not-allowed bg-slate-400'
+                !isRowSelected && !isSaving ? 'bg-gradient-to-r from-[#4F46E5] to-[#7C3AED] hover:shadow-md' : 'opacity-40 cursor-not-allowed bg-slate-400'
               }`}
             >
-              Enregistrer
+              {isSaving && !isRowSelected ? '⏳...' : 'Enregistrer'}
             </button>
             <button
               type="button"
-              disabled={!isRowSelected}
+              disabled={!isRowSelected || isSaving}
               onClick={handleMod}
               className={`py-2 px-1 rounded-lg text-xs font-bold transition border-[1.5px] ${
-                isRowSelected
+                isRowSelected && !isSaving
                   ? 'bg-[#F0FDF4] text-[#059669] border-[#BBF7D0] hover:bg-[#DCFCE7]'
                   : 'opacity-40 cursor-not-allowed bg-slate-100 text-slate-400 border-slate-200'
               }`}
             >
-              Modifier
+              {isSaving && isRowSelected ? '⏳...' : 'Modifier'}
             </button>
             <button
               type="button"
-              disabled={!isRowSelected}
+              disabled={!isRowSelected || isSaving}
               onClick={() => setDeleteConfirmOpen(true)}
               className={`py-2 px-1 rounded-lg text-xs font-bold transition border-[1.5px] ${
-                isRowSelected
+                isRowSelected && !isSaving
                   ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FECACA] hover:bg-[#FEE2E2]'
                   : 'opacity-40 cursor-not-allowed bg-slate-100 text-slate-400 border-slate-200'
               }`}
@@ -514,8 +546,9 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
             </button>
             <button
               type="button"
+              disabled={isSaving}
               onClick={raz}
-              className="py-2 px-1 rounded-lg text-xs font-bold bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#64748B] transition"
+              className="py-2 px-1 rounded-lg text-xs font-bold bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#64748B] transition disabled:opacity-40"
             >
               Annuler
             </button>
@@ -572,7 +605,7 @@ export const CaisseModule: React.FC<CaisseModuleProps> = ({
 
                   return (
                     <tr
-                      key={idx}
+                      key={m.ligne ?? idx}
                       onClick={() => loadRow(m, idx)}
                       className={`cursor-pointer transition ${
                         isSelected

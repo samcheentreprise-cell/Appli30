@@ -1,15 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import makeWASocket, {
-  Browsers,
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  useMultiFileAuthState,
-  WASocket,
-} from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import QRCode from 'qrcode';
+import type { WASocket } from '@whiskeysockets/baileys';
+import type { Boom } from '@hapi/boom';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -116,6 +109,18 @@ export async function startBuiltInWhatsApp(options?: {
     }
 
     currentState = 'connecting';
+
+    const baileysMod: any = await import('@whiskeysockets/baileys');
+    const makeWASocket = baileysMod.default?.default || baileysMod.default || baileysMod.makeWASocket;
+    const {
+      Browsers,
+      DisconnectReason,
+      fetchLatestBaileysVersion,
+      useMultiFileAuthState,
+    } = baileysMod;
+    const qrcodeMod: any = await import('qrcode');
+    const QRCode = qrcodeMod.default || qrcodeMod;
+
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     let version: [number, number, number] = [2, 3000, 1027934701];
@@ -126,11 +131,11 @@ export async function startBuiltInWhatsApp(options?: {
       // keep fallback version
     }
 
-    const activeSock = makeWASocket({
+    const activeSock: WASocket = makeWASocket({
       version,
       auth: state,
       logger: silentLogger,
-      browser: Browsers.ubuntu('Couvoir SAMCHE'),
+      browser: Browsers.macOS('Chrome'),
       printQRInTerminal: false,
       markOnlineOnConnect: false,
       syncFullHistory: false,
@@ -138,23 +143,56 @@ export async function startBuiltInWhatsApp(options?: {
     });
 
     sock = activeSock;
+    const rawPairing = (options?.pairingPhone || '').replace(/\D/g, '');
+    let pairingRequested = false;
 
-    activeSock.ev.on('creds.update', saveCreds);
-
-    activeSock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr && !options?.pairingPhone) {
-        try {
-          qrDataUrl = await QRCode.toDataURL(qr, {
-            width: 280,
-            margin: 2,
-            color: { dark: '#1a3050', light: '#ffffff' },
-          });
+    const triggerPairingCode = async () => {
+      if (pairingRequested || !rawPairing || state.creds.registered) return;
+      if (sock !== activeSock || currentState === 'connected') return;
+      pairingRequested = true;
+      try {
+        await activeSock.waitForSocketOpen();
+        const code = await activeSock.requestPairingCode(rawPairing);
+        if (sock === activeSock) {
+          qrDataUrl = null;
+          pairingCode = code ? code.replace(/(.{4})(?=.)/g, '$1-') : null;
           currentState = 'qr_ready';
           lastError = null;
-        } catch (err: any) {
-          lastError = err?.message || 'Erreur génération QR';
+        }
+      } catch (err: any) {
+        if (sock === activeSock) {
+          lastError =
+            err?.message || "Impossible de générer le code d'appairage";
+        }
+      }
+    };
+
+    activeSock.ev.on('creds.update', async () => {
+      if (sock !== activeSock) return;
+      await saveCreds();
+    });
+
+    activeSock.ev.on('connection.update', async (update) => {
+      if (sock !== activeSock) return;
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        if (rawPairing) {
+          qrDataUrl = null;
+          await triggerPairingCode();
+        } else {
+          try {
+            qrDataUrl = await QRCode.toDataURL(qr, {
+              width: 280,
+              margin: 2,
+              color: { dark: '#1a3050', light: '#ffffff' },
+            });
+            pairingCode = null;
+            currentState = 'qr_ready';
+            lastError = null;
+          } catch (err: any) {
+            lastError = err?.message || 'Erreur génération QR';
+          }
         }
       }
 
@@ -172,9 +210,7 @@ export async function startBuiltInWhatsApp(options?: {
         const errMessage =
           (lastDisconnect?.error as Error)?.message || 'Connexion fermée';
 
-        if (sock === activeSock) {
-          sock = null;
-        }
+        sock = null;
 
         const isLoggedOut = statusCode === DisconnectReason.loggedOut;
         if (manualDisconnect || isLoggedOut) {
@@ -202,22 +238,11 @@ export async function startBuiltInWhatsApp(options?: {
       }
     });
 
-    // Mode optionnel : code d'appairage à 8 chiffres au lieu du QR code
-    const rawPairing = (options?.pairingPhone || '').replace(/\D/g, '');
+    // Secours si l'événement qr tarde lors du mode code à 8 chiffres
     if (rawPairing && !state.creds.registered) {
-      setTimeout(async () => {
-        try {
-          if (sock === activeSock && currentState !== 'connected') {
-            const code = await activeSock.requestPairingCode(rawPairing);
-            pairingCode = code
-              ? code.replace(/(.{4})(?=.)/g, '$1-')
-              : null;
-            currentState = 'qr_ready';
-          }
-        } catch (err: any) {
-          lastError = err?.message || "Impossible de générer le code d'appairage";
-        }
-      }, 1500);
+      setTimeout(() => {
+        triggerPairingCode().catch(() => {});
+      }, 2000);
     }
 
     return getBuiltInWhatsAppStatus();
